@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=QShadow
+GenericName=HDMI capture viewer
+Comment=View a GENKI ShadowCast HDMI capture dongle with minimal latency
+Exec=qshadow
+Icon=qshadow
+Terminal=false
+Categories=AudioVideo;Video;Audio;
+Keywords=video;capture;hdmi;shadowcast;game;
+StartupNotify=true
+SingleMainWindow=true
