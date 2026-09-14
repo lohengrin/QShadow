@@ -11,6 +11,8 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QSettings>
+#include <QShortcut>
+#include <QSignalBlocker>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -62,6 +64,13 @@ void MainWindow::buildUi()
     toolbar->addWidget(new QLabel(QStringLiteral(" Resolution: "), toolbar));
     m_resCombo = new QComboBox(toolbar);
     toolbar->addWidget(m_resCombo);
+
+    toolbar->addSeparator();
+    m_fullscreenAction = new QAction(QStringLiteral("Fullscreen"), toolbar);
+    m_fullscreenAction->setCheckable(true);
+    m_fullscreenAction->setShortcut(QKeySequence(Qt::Key_F11));
+    toolbar->addAction(m_fullscreenAction);
+    m_fullscreenAction->setPriority(QAction::LowPriority);
     layout->addWidget(toolbar);
 
     m_video = new VideoWidget(central);
@@ -75,6 +84,25 @@ void MainWindow::buildUi()
 
     connect(m_aspectCheck, &QCheckBox::toggled, m_video, &VideoWidget::setPreserveAspect);
     connect(m_resCombo, &QComboBox::activated, this, &MainWindow::onResolutionChanged);
+    connect(m_fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
+
+    // Esc leaves fullscreen.
+    auto *escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escShortcut->setContext(Qt::ApplicationShortcut);
+    connect(escShortcut, &QShortcut::activated, this, [this] {
+        if (isFullScreen())
+            toggleFullscreen();
+    });
+}
+
+void MainWindow::toggleFullscreen()
+{
+    if (isFullScreen())
+        showNormal();
+    else
+        showFullScreen();
+    QSignalBlocker blocker(m_fullscreenAction);
+    m_fullscreenAction->setChecked(isFullScreen());
 }
 
 void MainWindow::findDevices()

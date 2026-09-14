@@ -27,6 +27,7 @@ protected:
 private slots:
     void onResolutionChanged(int index);
     void updateStatus();
+    void toggleFullscreen();
 
 private:
     void buildUi();
@@ -46,6 +47,7 @@ private:
     QLabel *m_statsLabel = nullptr;
     QComboBox *m_resCombo = nullptr;
     QCheckBox *m_aspectCheck = nullptr;
+    QAction *m_fullscreenAction = nullptr;
 
     Stats m_stats;
     FrameQueue m_queue{3};
