@@ -12,6 +12,7 @@
 #include <QTimer>
 
 class QCheckBox;
+class QCloseEvent;
 class QLabel;
 
 class MainWindow : public QMainWindow {
@@ -20,6 +21,9 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    void closeEvent(QCloseEvent *event) override;
+
 private slots:
     void onResolutionChanged(int index);
     void updateStatus();
@@ -27,6 +31,8 @@ private slots:
 private:
     void buildUi();
     void findDevices();
+    void loadSettings();
+    void saveSettings();
     void startPipeline();
     void stopPipeline();
     void showDeviceError(const QString &message);

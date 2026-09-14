@@ -5,10 +5,12 @@
 #include "videowidget.h"
 
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QSettings>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -21,6 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
     buildUi();
     findDevices();
+    loadSettings();
     startPipeline();
 
     m_statusTimer.setInterval(500);
@@ -31,6 +34,12 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     stopPipeline();
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    saveSettings();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::buildUi()
@@ -90,6 +99,43 @@ void MainWindow::findDevices()
     }
 
     m_audioCard = findShadowCastAudioCard();
+}
+
+void MainWindow::loadSettings()
+{
+    QSettings settings;
+
+    restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
+
+    if (settings.contains(QStringLiteral("aspectPreserve")))
+        m_aspectCheck->setChecked(settings.value(QStringLiteral("aspectPreserve")).toBool());
+
+    const QSize saved(settings.value(QStringLiteral("videoWidth")).toInt(),
+                      settings.value(QStringLiteral("videoHeight")).toInt());
+    if (saved.isValid()) {
+        for (int i = 0; i < m_resCombo->count(); ++i) {
+            if (m_resCombo->itemData(i).toSize() == saved) {
+                m_resCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+    m_video->setPreserveAspect(m_aspectCheck->isChecked());
+}
+
+void MainWindow::saveSettings()
+{
+    QSettings settings;
+
+    settings.setValue(QStringLiteral("geometry"), saveGeometry());
+    settings.setValue(QStringLiteral("aspectPreserve"), m_aspectCheck->isChecked());
+
+    const QSize res = m_resCombo->currentData().toSize();
+    if (res.isValid()) {
+        settings.setValue(QStringLiteral("videoWidth"), res.width());
+        settings.setValue(QStringLiteral("videoHeight"), res.height());
+    }
+    settings.sync();
 }
 
 void MainWindow::startPipeline()

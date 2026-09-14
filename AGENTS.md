@@ -12,6 +12,8 @@ host with minimal latency.
   source's active resolution/rate and preserves aspect ratio.
 - Audio: ALSA capture from the dongle (S16_LE mono 96 kHz) → resampled to
   stereo 48 kHz float → host default output via Qt Multimedia `QAudioSink`.
+- Settings (window geometry, aspect toggle, selected resolution) persist in
+  `QSettings` and are restored on the next launch.
 - Platform: Linux, Wayland only. Native ALSA/V4L2, no GStreamer.
 
 ## Build
