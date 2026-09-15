@@ -30,6 +30,8 @@ public:
 
     qint64 pull(char *dst, qint64 maxBytes)
     {
+        if (maxBytes <= 0)
+            return 0;
         QMutexLocker lock(&m_mutex);
         qint64 total = 0;
         while (total < maxBytes && !m_chunks.empty()) {
@@ -43,9 +45,9 @@ public:
             else
                 front.remove(0, int(take));
         }
-        if (total < maxBytes) {
-            std::memset(dst + total, 0, size_t(maxBytes - total));
-            m_underruns.fetch_add(1);
+        if (total == 0 && maxBytes > 0) {
+            // Real starvation: nothing buffered at all when the sink pulled.
+            m_underruns.fetch_add(1, std::memory_order_relaxed);
         }
         return total;
     }
@@ -58,15 +60,25 @@ public:
 
     uint64_t underruns() const { return m_underruns.load(); }
 
+    size_t depthBytes() const
+    {
+        QMutexLocker lock(&m_mutex);
+        size_t bytes = 0;
+        for (const QByteArray &c : m_chunks)
+            bytes += size_t(c.size());
+        return bytes;
+    }
+
 private:
-    static constexpr size_t m_capacity = 8;
+    static constexpr size_t m_capacity = 16;
     mutable QMutex m_mutex;
     std::deque<QByteArray> m_chunks;
     std::atomic<uint64_t> m_underruns{0};
 };
 
 // QIODevice Qt's audio output pulls PCM from (pull model). Data comes from the
-// ring; silence is injected on underrun so the pull never blocks.
+// ring; returns only what is actually buffered (never fabricates silence) so
+// the sink is paced by real data. Logger counts only true starvation.
 class HostAudioSink : public QIODevice {
 public:
     explicit HostAudioSink(AudioRing *ring) : m_ring(ring) {}
@@ -78,7 +90,10 @@ public:
 
     qint64 writeData(const char *, qint64) override { return -1; }
 
-    qint64 bytesAvailable() const override { return 8192; }
+    qint64 bytesAvailable() const override
+    {
+        return m_ring ? qint64(m_ring->depthBytes()) : qint64(0);
+    }
 
 private:
     AudioRing *m_ring;
