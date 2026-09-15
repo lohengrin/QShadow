@@ -1,5 +1,6 @@
 #include "audio.h"
 
+#include <QAudio>
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QAudioSink>
@@ -68,6 +69,7 @@ bool AudioSink::open(AudioRing *ring, QString *error)
 
     m_sink = new QAudioSink(device, format);
     m_sink->setBufferSize(int(double(kOutputRate) * 2 * 2 * 0.04)); // ~40 ms
+    m_sink->setVolume(m_volume);
     m_sink->start(m_host);
 
     const QAudio::State st = m_sink->state();
@@ -80,6 +82,13 @@ bool AudioSink::open(AudioRing *ring, QString *error)
         return false;
     }
     return true;
+}
+
+void AudioSink::setVolume(qreal volume)
+{
+    m_volume = qBound<qreal>(0.0, volume, 1.0);
+    if (m_sink)
+        m_sink->setVolume(m_volume);
 }
 
 void AudioSink::close()

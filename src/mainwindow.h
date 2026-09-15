@@ -14,6 +14,7 @@
 class QCheckBox;
 class QCloseEvent;
 class QLabel;
+class QSlider;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -47,6 +48,7 @@ private:
     QLabel *m_statsLabel = nullptr;
     QComboBox *m_resCombo = nullptr;
     QCheckBox *m_aspectCheck = nullptr;
+    QSlider *m_volumeSlider = nullptr;
     QAction *m_fullscreenAction = nullptr;
 
     Stats m_stats;
