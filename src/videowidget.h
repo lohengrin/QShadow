@@ -2,13 +2,31 @@
 
 #include <QImage>
 #include <QMutex>
+#include <QOpenGLBuffer>
+#include <QOpenGLFunctions_3_3_Core>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLVertexArrayObject>
 #include <QOpenGLWidget>
+#include <QRectF>
+#include <QSize>
 
-// Renders the latest decoded frame. The GUI thread only ever blits the newest
-// frame; aspect ratio is preserved by letterboxing when enabled.
+#include <array>
+
+// Renders the latest decoded frame as a full-screen textured quad through a
+// selectable shader program. The GUI thread only ever blits the newest frame;
+// aspect ratio is preserved by letterboxing when enabled.
 class VideoWidget : public QOpenGLWidget {
     Q_OBJECT
 public:
+    enum class ShaderMode {
+        None = 0,
+        Bilinear,
+        Hq4x,
+        Xbrz,
+        CrtGeom,
+        CrtRoyale,
+    };
+
     explicit VideoWidget(QWidget *parent = nullptr);
 
     QImage currentFrame() const;
@@ -16,12 +34,35 @@ public:
 public slots:
     void setFrame(const QImage &frame);
     void setPreserveAspect(bool on);
+    void setShaderMode(ShaderMode mode);
 
 protected:
+    void initializeGL() override;
+    void resizeGL(int w, int h) override;
     void paintGL() override;
 
 private:
+    struct Vertex {
+        float x, y, u, v;
+    };
+
+    QOpenGLShaderProgram *programFor(ShaderMode mode);
+    void uploadFrame(const QImage &frame);
+    void uploadLut();
+    void updateQuad(const QRectF &target);
+    void drawFrame(const QRectF &target);
+
     mutable QMutex m_mutex;
     QImage m_frame;
     bool m_preserveAspect = true;
+    ShaderMode m_shaderMode = ShaderMode::None;
+
+    QOpenGLFunctions_3_3_Core *m_gl = nullptr;
+    QOpenGLVertexArrayObject m_vao;
+    QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
+    std::array<GLuint, 2> m_textures{0, 0}; // [0]=frame, [1]=hq4x LUT
+    QSize m_frameSize;                      // allocated texture dimensions
+    std::array<QOpenGLShaderProgram, 6> m_programs;
+    bool m_programReady[6] = {};
+    bool m_lutReady = false;
 };
