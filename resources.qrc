@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>shaders/passthrough.vert</file>
+        <file>shaders/passthrough.frag</file>
+        <file>shaders/hq4x.frag</file>
+        <file>shaders/hq4x.png</file>
+        <file>shaders/xbrz.frag</file>
+        <file>shaders/crt-geom.frag</file>
+        <file>shaders/crt-royale.frag</file>
+    </qresource>
+</RCC>

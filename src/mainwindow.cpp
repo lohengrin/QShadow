@@ -67,6 +67,23 @@ void MainWindow::buildUi()
     toolbar->addWidget(m_resCombo);
 
     toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral(" Shader: "), toolbar));
+    m_shaderCombo = new QComboBox(toolbar);
+    m_shaderCombo->addItem(QStringLiteral("None"),
+                           int(VideoWidget::ShaderMode::None));
+    m_shaderCombo->addItem(QStringLiteral("Bilinear smooth"),
+                           int(VideoWidget::ShaderMode::Bilinear));
+    m_shaderCombo->addItem(QStringLiteral("HQ4X"),
+                           int(VideoWidget::ShaderMode::Hq4x));
+    m_shaderCombo->addItem(QStringLiteral("xBRZ"),
+                           int(VideoWidget::ShaderMode::Xbrz));
+    m_shaderCombo->addItem(QStringLiteral("CRT-Geom"),
+                           int(VideoWidget::ShaderMode::CrtGeom));
+    m_shaderCombo->addItem(QStringLiteral("CRT-Royale"),
+                           int(VideoWidget::ShaderMode::CrtRoyale));
+    toolbar->addWidget(m_shaderCombo);
+
+    toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral(" Volume: "), toolbar));
     m_volumeSlider = new QSlider(Qt::Horizontal, toolbar);
     m_volumeSlider->setRange(0, 100);
@@ -97,6 +114,11 @@ void MainWindow::buildUi()
         m_audioSink.setVolume(qreal(v) / 100.0);
     });
     connect(m_resCombo, &QComboBox::activated, this, &MainWindow::onResolutionChanged);
+    connect(m_shaderCombo, qOverload<int>(&QComboBox::activated), this,
+            [this](int index) {
+                m_video->setShaderMode(VideoWidget::ShaderMode(
+                    m_shaderCombo->itemData(index).toInt()));
+            });
     connect(m_fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
 
     // Esc leaves fullscreen.
@@ -154,6 +176,15 @@ void MainWindow::loadSettings()
     if (settings.contains(QStringLiteral("volume")))
         m_volumeSlider->setValue(settings.value(QStringLiteral("volume")).toInt());
 
+    if (settings.contains(QStringLiteral("shader"))) {
+        const int shader = settings.value(QStringLiteral("shader")).toInt();
+        const int comboIndex = m_shaderCombo->findData(shader);
+        if (comboIndex >= 0)
+            m_shaderCombo->setCurrentIndex(comboIndex);
+    }
+    m_video->setShaderMode(VideoWidget::ShaderMode(
+        m_shaderCombo->currentData().toInt()));
+
     // The slider's setValue() above already applied volume via valueChanged;
     // also hand it to a not-yet-open sink so it takes effect on start.
     m_audioSink.setVolume(qreal(m_volumeSlider->value()) / 100.0);
@@ -178,6 +209,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
     settings.setValue(QStringLiteral("aspectPreserve"), m_aspectCheck->isChecked());
     settings.setValue(QStringLiteral("volume"), m_volumeSlider->value());
+    settings.setValue(QStringLiteral("shader"), m_shaderCombo->currentData().toInt());
 
     const QSize res = m_resCombo->currentData().toSize();
     if (res.isValid()) {

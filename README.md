@@ -19,8 +19,12 @@ possible.
   busy, and the audio buffer is kept short.
 - **Audio** captured from the dongle at native 96 kHz and resampled to the
   host output.
-- **Remembers your settings** — window size, aspect-ratio toggle and the
-  selected resolution are restored on the next launch.
+- **Remembers your settings** — window size, aspect-ratio toggle,
+  selected resolution, volume and shader are restored on the next launch.
+- **GPU sharpening & CRT shaders** — pick a post-processing shader from the
+  toolbar: nearest-neighbor *None*, *Bilinear smooth*, the pixel-art upscalers
+  **HQ4X** and **xBRZ**, and the CRT emulators **CRT-Geom** and
+  **CRT-Royale**.
 
 ## Requirements
 
@@ -64,6 +68,13 @@ Make sure the ShadowCast is plugged in before you start it.
 - **Aspect ratio** — toggle *Preserve aspect*. When on, the picture is fitted
   inside the window with black bars so it never gets stretched. When off, it
   fills the whole window.
+- **Shader** — pick a rendering style from the toolbar. *None* shows pixels
+  hard (nearest-neighbor) — best to minimize any added smoothing; *Bilinear
+  smooth* softens the upscale. *HQ4X* and *xBRZ* are sharp, edge-directed
+  scaling (best on clean low-res 240p/480p sources), and *CRT-Geom* /
+  *CRT-Royale* simulate an interlaced CRT (scanlines, aperture-grille mask,
+  curvature). GPU shaders need a GL 3.3-core-capable driver, which any modern
+  Mesa/ANGLE stack provides.
 - **Status bar** — shows the device, negotiated resolution, per-frame
   resolution, audio state, capture/decode frame rates, dropped frames, and
   average decode time.

@@ -4,6 +4,7 @@ project(qshadow VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
@@ -16,6 +17,7 @@ find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
 
 qt_add_executable(qshadow
+  resources.qrc
   src/main.cpp
   src/device.h src/device.cpp
   src/capture.h src/capture.cpp
