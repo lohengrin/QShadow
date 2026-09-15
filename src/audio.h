@@ -113,11 +113,14 @@ public:
     bool open(AudioRing *ring, QString *error);
     void close();
     bool active() const { return m_active; }
+    void setVolume(qreal volume);
+    qreal volume() const { return m_volume; }
 
 private:
     QAudioSink *m_sink = nullptr;
     HostAudioSink *m_host = nullptr;
     bool m_active = false;
+    qreal m_volume = 1.0;
 };
 
 // ALSA capture from the ShadowCast card (S16_LE mono 96 kHz), resampled to
