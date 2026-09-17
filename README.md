@@ -20,11 +20,15 @@ possible.
 - **Audio** captured from the dongle at native 96 kHz and resampled to the
   host output.
 - **Remembers your settings** — window size, aspect-ratio toggle,
-  selected resolution, volume and shader are restored on the next launch.
+  selected resolution, volume, shader and downscale are restored on the next
+  launch.
 - **GPU sharpening & CRT shaders** — pick a post-processing shader from the
   toolbar: nearest-neighbor *None*, *Bilinear smooth*, the pixel-art upscalers
   **HQ4X** and **xBRZ**, and the CRT emulators **CRT-Geom** and
   **CRT-Royale**.
+- **Downscale** — the capture source may have already scaled the signal up to
+  fit a fixed resolution; the *Downscale* selector point-decimates the frame
+  (off / ×2 / ×4) back to its native grid before the shader runs.
 
 ## Requirements
 
@@ -75,6 +79,12 @@ Make sure the ShadowCast is plugged in before you start it.
   *CRT-Royale* simulate an interlaced CRT (scanlines, aperture-grille mask,
   curvature). GPU shaders need a GL 3.3-core-capable driver, which any modern
   Mesa/ANGLE stack provides.
+- **Downscale** — if the source/capture chain already upscaled the picture to
+  a fixed resolution (e.g. 4:3 content blown up to 640×480), set this to the
+  matching factor (×2, ×4, or off). The frame is point-decimated back to the
+  original pixel grid with nearest-neighbour before the shader runs, so HQ4X
+  and xBRZ reconstruct real edges instead of smearing an already-soft image
+  (and their GPU cost drops accordingly).
 - **Status bar** — shows the device, negotiated resolution, per-frame
   resolution, audio state, capture/decode frame rates, dropped frames, and
   average decode time.

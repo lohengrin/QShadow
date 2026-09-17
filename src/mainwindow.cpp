@@ -84,6 +84,17 @@ void MainWindow::buildUi()
     toolbar->addWidget(m_shaderCombo);
 
     toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral(" Downscale: "), toolbar));
+    m_downscaleCombo = new QComboBox(toolbar);
+    m_downscaleCombo->addItem(QStringLiteral("Off"), 1);
+    m_downscaleCombo->addItem(QStringLiteral("×2"), 2);
+    m_downscaleCombo->addItem(QStringLiteral("×4"), 4);
+    m_downscaleCombo->setToolTip(
+        QStringLiteral("Nearest-neighbour downscale of the capture, matching "
+                       "the source's own pre-upscale, before the video shader"));
+    toolbar->addWidget(m_downscaleCombo);
+
+    toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral(" Volume: "), toolbar));
     m_volumeSlider = new QSlider(Qt::Horizontal, toolbar);
     m_volumeSlider->setRange(0, 100);
@@ -118,6 +129,10 @@ void MainWindow::buildUi()
             [this](int index) {
                 m_video->setShaderMode(VideoWidget::ShaderMode(
                     m_shaderCombo->itemData(index).toInt()));
+            });
+    connect(m_downscaleCombo, qOverload<int>(&QComboBox::activated), this,
+            [this](int index) {
+                m_video->setDownscale(m_downscaleCombo->itemData(index).toInt());
             });
     connect(m_fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
 
@@ -185,6 +200,14 @@ void MainWindow::loadSettings()
     m_video->setShaderMode(VideoWidget::ShaderMode(
         m_shaderCombo->currentData().toInt()));
 
+    if (settings.contains(QStringLiteral("downscale"))) {
+        const int downscale = settings.value(QStringLiteral("downscale")).toInt();
+        const int comboIndex = m_downscaleCombo->findData(downscale);
+        if (comboIndex >= 0)
+            m_downscaleCombo->setCurrentIndex(comboIndex);
+    }
+    m_video->setDownscale(m_downscaleCombo->currentData().toInt());
+
     // The slider's setValue() above already applied volume via valueChanged;
     // also hand it to a not-yet-open sink so it takes effect on start.
     m_audioSink.setVolume(qreal(m_volumeSlider->value()) / 100.0);
@@ -210,6 +233,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("aspectPreserve"), m_aspectCheck->isChecked());
     settings.setValue(QStringLiteral("volume"), m_volumeSlider->value());
     settings.setValue(QStringLiteral("shader"), m_shaderCombo->currentData().toInt());
+    settings.setValue(QStringLiteral("downscale"), m_downscaleCombo->currentData().toInt());
 
     const QSize res = m_resCombo->currentData().toSize();
     if (res.isValid()) {

@@ -48,6 +48,7 @@ private:
     QLabel *m_statsLabel = nullptr;
     QComboBox *m_resCombo = nullptr;
     QComboBox *m_shaderCombo = nullptr;
+    QComboBox *m_downscaleCombo = nullptr;
     QCheckBox *m_aspectCheck = nullptr;
     QSlider *m_volumeSlider = nullptr;
     QAction *m_fullscreenAction = nullptr;
