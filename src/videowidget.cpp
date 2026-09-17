@@ -293,7 +293,6 @@ void VideoWidget::runDownscale(const QSize &targetSize)
     m_gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     m_downscaleProgram.setUniformValue("uTex", 0);
-    m_downscaleProgram.setUniformValue("uScale", float(m_downscale));
 
     m_vao.bind();
     m_gl->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
