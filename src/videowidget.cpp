@@ -55,6 +55,16 @@ void VideoWidget::setShaderMode(ShaderMode mode)
     update();
 }
 
+void VideoWidget::setDownscale(int factor)
+{
+    if (factor != 2 && factor != 4)
+        factor = 1;
+    if (m_downscale == factor)
+        return;
+    m_downscale = factor;
+    update();
+}
+
 void VideoWidget::initializeGL()
 {
     m_gl = QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_3_3_Core>(context());
@@ -78,6 +88,13 @@ void VideoWidget::initializeGL()
     m_vao.release();
 
     m_gl->glGenTextures(2, m_textures.data());
+
+    // Release GL objects before the context disappears.
+    connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this] {
+        delete m_fbo;
+        m_fbo = nullptr;
+        m_gl = nullptr;
+    });
 }
 
 void VideoWidget::resizeGL(int, int)
@@ -102,8 +119,30 @@ void VideoWidget::paintGL()
     locker.unlock();
 
     uploadFrame(m_frame);
+
+    GLuint srcTex = m_textures[0];
+    QSize srcSize = m_frameSize;
+
+    // Optional nearest-neighbour downscale: the ShadowCast has already scaled
+    // the input up to a fixed size, so before the chosen shader runs we
+    // recover the native source grid by point-decimating the capture.
+    if (m_downscale > 1) {
+        const QSize down(m_frameSize.width() / m_downscale,
+                         m_frameSize.height() / m_downscale);
+        if (down.width() > 0 && down.height() > 0) {
+            if (!downscaleProgramReady())
+                return;
+            updateQuad(QRectF(0, 0, width(), height()));
+            runDownscale(down);
+            if (m_fbo && m_fbo->isValid()) {
+                srcTex = m_fbo->texture();
+                srcSize = down;
+            }
+        }
+    }
+
     updateQuad(target);
-    drawFrame(target);
+    drawFrame(srcTex, srcSize, target);
 }
 
 QOpenGLShaderProgram *VideoWidget::programFor(ShaderMode mode)
@@ -137,6 +176,22 @@ QOpenGLShaderProgram *VideoWidget::programFor(ShaderMode mode)
     }
     m_programReady[index] = true;
     return program;
+}
+
+bool VideoWidget::downscaleProgramReady()
+{
+    if (m_downscaleReady)
+        return true;
+    if (!m_downscaleProgram.addShaderFromSourceFile(QOpenGLShader::Vertex,
+                                                    ":/shaders/downscale.vert")
+        || !m_downscaleProgram.addShaderFromSourceFile(QOpenGLShader::Fragment,
+                                                       ":/shaders/passthrough.frag")
+        || !m_downscaleProgram.link()) {
+        qWarning() << "Downscale shader:" << m_downscaleProgram.log();
+        return false;
+    }
+    m_downscaleReady = true;
+    return true;
 }
 
 void VideoWidget::uploadFrame(const QImage &frame)
@@ -208,7 +263,51 @@ void VideoWidget::updateQuad(const QRectF &target)
     m_vbo.release();
 }
 
-void VideoWidget::drawFrame(const QRectF &target)
+void VideoWidget::runDownscale(const QSize &targetSize)
+{
+    if (!m_fbo || m_fbo->size() != targetSize) {
+        delete m_fbo;
+        QOpenGLFramebufferObjectFormat format;
+        format.setAttachment(QOpenGLFramebufferObject::NoAttachment);
+        format.setTextureTarget(GL_TEXTURE_2D);
+        m_fbo = new QOpenGLFramebufferObject(targetSize, format);
+    }
+    if (!m_fbo->isValid()) {
+        qWarning() << "Downscale framebuffer invalid";
+        return;
+    }
+
+    m_fbo->bind();
+    m_gl->glViewport(0, 0, targetSize.width(), targetSize.height());
+    m_gl->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    m_gl->glClear(GL_COLOR_BUFFER_BIT);
+
+    m_downscaleProgram.bind();
+
+    m_gl->glActiveTexture(GL_TEXTURE0);
+    m_gl->glBindTexture(GL_TEXTURE_2D, m_textures[0]);
+    // Point decimation: sample every Nth source texel.
+    m_gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    m_gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    m_gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    m_gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    m_downscaleProgram.setUniformValue("uTex", 0);
+    m_downscaleProgram.setUniformValue("uScale", float(m_downscale));
+
+    m_vao.bind();
+    m_gl->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    m_vao.release();
+
+    m_downscaleProgram.release();
+    m_fbo->release();
+
+    // Restore the widget framebuffer viewport.
+    m_gl->glViewport(0, 0, int(width() * devicePixelRatioF()),
+                     int(height() * devicePixelRatioF()));
+}
+
+void VideoWidget::drawFrame(GLuint texture, const QSize &texSize, const QRectF &target)
 {
     QOpenGLShaderProgram *program = programFor(m_shaderMode);
     if (!program)
@@ -216,7 +315,7 @@ void VideoWidget::drawFrame(const QRectF &target)
     program->bind();
 
     m_gl->glActiveTexture(GL_TEXTURE0);
-    m_gl->glBindTexture(GL_TEXTURE_2D, m_textures[0]);
+    m_gl->glBindTexture(GL_TEXTURE_2D, texture);
     const bool smooth = m_shaderMode != ShaderMode::None;
     const GLint filter = smooth ? GL_LINEAR : GL_NEAREST;
     m_gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
@@ -226,8 +325,8 @@ void VideoWidget::drawFrame(const QRectF &target)
 
     program->setUniformValue("uTex", 0);
     program->setUniformValue("uTexSize",
-                             QVector2D(float(m_frameSize.width()),
-                                       float(m_frameSize.height())));
+                             QVector2D(float(texSize.width()),
+                                       float(texSize.height())));
 
     if (m_shaderMode == ShaderMode::Hq4x) {
         if (!m_lutReady)
@@ -307,8 +406,8 @@ void VideoWidget::drawFrame(const QRectF &target)
         const float stretchZ = std::max(hiX - loX, hiY - loY);
 
         program->setUniformValue("uInSize",
-                                 QVector2D(float(m_frameSize.width()),
-                                           float(m_frameSize.height())));
+                                 QVector2D(float(texSize.width()),
+                                           float(texSize.height())));
         program->setUniformValue("uAspect", QVector2D(aspect, 1.0f));
         program->setUniformValue("uStretch",
                                  QVector3D(stretchX, stretchY, stretchZ));
