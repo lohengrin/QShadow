@@ -1,4 +1,4 @@
-#version 330 core
+#version 450
 
 // CRT-interlaced (screen curvature variant), single pass.
 //
@@ -7,20 +7,24 @@
 //     Licensed under the GNU General Public License, version 2 or later
 //     (see https://www.gnu.org/licenses/gpl-2.0.html)
 //
-// Changes for this app: standalone GLSL 330 core, all shader parameters baked
-// to the upstream defaults, curvature geometry (maxscale/aspect) computed on
-// the CPU once per frame and passed as uniforms.
+// Changes for this app: Vulkan GLSL 450 (set/push-constant bindings instead of
+// OpenGL uniforms), all shader parameters baked to the upstream defaults,
+// curvature geometry (maxscale/aspect) computed on the CPU once per frame and
+// passed as push constants.
 
-uniform sampler2D uTex;
-uniform vec2 uTexSize;   // source texture size, pixels
-uniform vec2 uInSize;    // source frame size, pixels
-uniform vec2 uOutSize;   // target rect size, pixels
-uniform vec2 uAspect;    // target aspect (x/y, 1.0)
-uniform vec3 uStretch;   // maxscale geometry
-uniform float uModScale; // TextureSize.x * OutputSize.x / InputSize.x
+layout(set = 0, binding = 0) uniform sampler2D uTex;
 
-in vec2 v_uv;
-out vec4 FragColor;
+layout(push_constant) uniform Params {
+    vec2 uTexSize;   // source texture size, pixels
+    vec2 uInSize;    // source frame size, pixels
+    vec2 uOutSize;   // target rect size, pixels
+    vec2 uAspect;    // target aspect (x/y, 1.0)
+    vec3 uStretch;   // maxscale geometry
+    float uModScale; // TextureSize.x * OutputSize.x / InputSize.x
+};
+
+layout(location = 0) in vec2 v_uv;
+layout(location = 0) out vec4 FragColor;
 
 // Defaults from the upstream #pragma/#define block.
 const float CRTgamma = 2.4;
@@ -118,8 +122,7 @@ vec3 inv_gamma(vec3 col, vec3 power)
 {
     vec3 cir = col - 1.0;
     cir *= cir;
-    col = mix(sqrt(col), sqrt(1.0 - cir), power);
-    return col;
+    return mix(sqrt(col), sqrt(1.0 - cir), power);
 }
 
 void main()

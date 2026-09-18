@@ -1,4 +1,4 @@
-#version 330 core
+#version 450
 
 /*
    Hyllian's xBR-vertex code and texel mapping (xBRZ free scale, single pass).
@@ -26,14 +26,22 @@
    This shader also uses code and/or concepts from xBRZ as it appears in the
    Desmume source code (GPL, see https://www.gnu.org/licenses/gpl-3.0):
    Copyright (C) Zenju (zenju AT gmx DOT de) - All Rights Reserved.
+   (Converted to Vulkan GLSL 450 for QShadow.)
 */
 
-uniform sampler2D uTex;   // source frame
-uniform vec2 uTexSize;    // source frame size, pixels
-uniform vec2 uOutSize;    // target rect size, pixels
+layout(set = 0, binding = 0) uniform sampler2D uTex;   // source frame
 
-in vec2 v_uv;
-out vec4 FragColor;
+layout(push_constant) uniform Params {
+    vec2 uTexSize;    // source frame size, pixels
+    vec2 uInSize;     // source frame size, pixels
+    vec2 uOutSize;    // target rect size, pixels
+    vec2 uAspect;
+    vec3 uStretch;
+    float uModScale;
+};
+
+layout(location = 0) in vec2 v_uv;
+layout(location = 0) out vec4 FragColor;
 
 #define SourceSize vec4(uTexSize, 1.0 / uTexSize)
 #define P(x, y) texture(uTex, coord + SourceSize.zw * vec2(x, y)).rgb

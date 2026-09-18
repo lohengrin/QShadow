@@ -1,4 +1,4 @@
-#version 330 core
+#version 450
 
 // Single-pass CRT emulation in the style of the libretro crt-royale
 // "fake-bloom" preset (aperture grille, scanlines, halation bloom, gentle
@@ -9,12 +9,19 @@
 // offscreen buffers). It is not derived directly from libretro shader source;
 // it only mimics the projected look. See ATTRIBUTION.md.
 
-uniform sampler2D uTex;
-uniform vec2 uTexSize;
-uniform vec2 uOutSize;
+layout(set = 0, binding = 0) uniform sampler2D uTex;
 
-in vec2 v_uv;
-out vec4 FragColor;
+layout(push_constant) uniform Params {
+    vec2 uTexSize;
+    vec2 uInSize;
+    vec2 uOutSize;
+    vec2 uAspect;
+    vec3 uStretch;
+    float uModScale;
+};
+
+layout(location = 0) in vec2 v_uv;
+layout(location = 0) out vec4 FragColor;
 
 // Curvature: pinch uv coordinates toward the center (barrel shape).
 vec2 curve(vec2 uv)

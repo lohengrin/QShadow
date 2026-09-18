@@ -1,0 +1,50 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+// AMD FidelityFX Super Resolution 1.0 - RCAS (Robust Contrast Adaptive Sharpening).
+// Adapted from the official FSR 1.0 Vulkan sample (sample/src/VK/FSR_Pass.glsl):
+//     Copyright (c) 2021 Advanced Micro Devices, Inc.
+//     SPDX-License-Identifier: MIT
+// Uses the FP32 (non-half) path for maximum driver compatibility.
+// The RCAS constant (Const0) is packed on the CPU (see src/fsrconsts).
+
+layout(set = 0, binding = 0) uniform UBuffer {
+    uvec4 Const0;
+    uvec4 Const1;
+    uvec4 Const2;
+    uvec4 Const3;
+};
+
+layout(set = 0, binding = 1) uniform sampler2D InputTexture;
+layout(set = 0, binding = 2, rgba32f) uniform image2D OutputTexture;
+
+#define A_GPU 1
+#define A_GLSL 1
+#define FSR_RCAS_F 1
+
+#include "ffx_a.h"
+#include "ffx_fsr1.h"
+
+AF4 FsrRcasLoadF(ASU2 p) { return texelFetch(InputTexture, ASU2(p), 0); }
+void FsrRcasInputF(inout AF1 r, inout AF1 g, inout AF1 b) { }
+
+void CurrFilter(AU2 pos)
+{
+    AF3 c;
+    FsrRcasF(c.r, c.g, c.b, pos, Const0);
+    imageStore(OutputTexture, ASU2(pos), AF4(c, 1.0));
+}
+
+layout(local_size_x = 64) in;
+void main()
+{
+    // 8x8 thread remap; each workgroup covers a 16x16 output tile.
+    AU2 gxy = ARmp8x8(gl_LocalInvocationID.x) + AU2(gl_WorkGroupID.x << 4u, gl_WorkGroupID.y << 4u);
+    CurrFilter(gxy);
+    gxy.x += 8u;
+    CurrFilter(gxy);
+    gxy.y += 8u;
+    CurrFilter(gxy);
+    gxy.x -= 8u;
+    CurrFilter(gxy);
+}

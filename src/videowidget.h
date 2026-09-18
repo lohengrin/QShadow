@@ -2,21 +2,18 @@
 
 #include <QImage>
 #include <QMutex>
-#include <QOpenGLBuffer>
-#include <QOpenGLFramebufferObject>
-#include <QOpenGLFunctions_3_3_Core>
-#include <QOpenGLShaderProgram>
-#include <QOpenGLVertexArrayObject>
-#include <QOpenGLWidget>
-#include <QRectF>
 #include <QSize>
+#include <QVulkanWindow>
 
-#include <array>
+#include <atomic>
 
-// Renders the latest decoded frame as a full-screen textured quad through a
-// selectable shader program. The GUI thread only ever blits the newest frame;
-// aspect ratio is preserved by letterboxing when enabled.
-class VideoWidget : public QOpenGLWidget {
+// Native-Vulkan display widget. Owns the QVulkanWindow plumbing and the
+// thread-safe state the renderer consumes; all drawing happens on
+// QVulkanWindow's render thread inside VulkanRenderer (see vulkanrenderer.h).
+//
+// The GUI thread only ever stores the newest decoded frame (drop-on-
+// backpressure), exactly like the previous OpenGL widget did.
+class VideoWidget : public QVulkanWindow {
     Q_OBJECT
 public:
     enum class ShaderMode {
@@ -26,52 +23,41 @@ public:
         Xbrz,
         CrtGeom,
         CrtRoyale,
+        // AMD FSR 1.0 (spatial) — presets are the reversible upscale ratios
+        // of FSR 1.0, see README.
+        FsrUltraQuality,
+        FsrQuality,
+        FsrBalanced,
+        FsrPerformance,
+        FsrSharpenOnly,
     };
 
-    explicit VideoWidget(QWidget *parent = nullptr);
+    explicit VideoWidget(QWindow *parent = nullptr);
+    ~VideoWidget() override;
 
-    QImage currentFrame() const;
+    // State shared with the renderer. Fields are atomics so the GUI thread can
+    // update them without locking while the render thread reads them.
+    struct State {
+        std::atomic<int> shaderMode{int(ShaderMode::None)};
+        std::atomic<int> downscale{1};
+        std::atomic<bool> preserveAspect{true};
+    };
+
+    QVulkanWindowRenderer *createRenderer() override;
 
 public slots:
-    void setFrame(const QImage &frame);
+    void setFrame(const QImage &frame);     // may be called from any thread
     void setPreserveAspect(bool on);
     void setShaderMode(ShaderMode mode);
     void setDownscale(int factor);
 
-protected:
-    void initializeGL() override;
-    void resizeGL(int w, int h) override;
-    void paintGL() override;
-
 private:
-    struct Vertex {
-        float x, y, u, v;
-    };
+    // Renderer reads these; mutex only guards the pending frame image.
+    bool takePendingFrame(QImage *out);
 
-    QOpenGLShaderProgram *programFor(ShaderMode mode);
-    bool downscaleProgramReady();
-    void uploadFrame(const QImage &frame);
-    void uploadLut();
-    void updateQuad(const QRectF &target);
-    void runDownscale(const QSize &targetSize);
-    void drawFrame(GLuint texture, const QSize &texSize, const QRectF &target);
+    friend class VulkanRenderer;
 
-    mutable QMutex m_mutex;
-    QImage m_frame;
-    bool m_preserveAspect = true;
-    ShaderMode m_shaderMode = ShaderMode::None;
-    int m_downscale = 1; // nearest-neighbour decimation of the capture (1/2/4)
-
-    QOpenGLFunctions_3_3_Core *m_gl = nullptr;
-    QOpenGLVertexArrayObject m_vao;
-    QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
-    std::array<GLuint, 2> m_textures{0, 0}; // [0]=frame, [1]=hq4x LUT
-    QSize m_frameSize;                      // allocated texture dimensions
-    QOpenGLFramebufferObject *m_fbo = nullptr;
-    QSize m_fboSize;
-    QOpenGLShaderProgram m_downscaleProgram;
-    bool m_downscaleReady = false;
-    std::array<QOpenGLShaderProgram, 6> m_programs;
-    bool m_programReady[6] = {};
-    bool m_lutReady = false;
+    State m_state;
+    mutable QMutex m_frameMutex;
+    QImage m_pending;
 };
