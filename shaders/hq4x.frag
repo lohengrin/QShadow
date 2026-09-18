@@ -1,17 +1,25 @@
-#version 330 core
+#version 450
 
 // hq4x single-pass upscaler.
-// Faithful GLSL 330 port of the libretro glsl-shaders single-pass hq4x
-// (hqx/single-pass/shader-files/hq4x.glsl, auto-translated from the Cg
-// original by hylian). The interpolation weights are looked up in the
-// 256x256 RGBA table shipped as hq4x.png.
+// Faithful GLSL 330 -> 450 (Vulkan) port of the libretro glsl-shaders
+// single-pass hq4x (hqx/single-pass/shader-files/hq4x.glsl, auto-translated
+// from the Cg original by hylian). The interpolation weights are looked up in
+// the 256x256 RGBA table shipped as hq4x.png.
 
-uniform sampler2D uTex;
-uniform sampler2D uLut;
-uniform vec2 uTexSize;
+layout(set = 0, binding = 0) uniform sampler2D uTex;
+layout(set = 0, binding = 1) uniform sampler2D uLut;
 
-in vec2 v_uv;
-out vec4 FragColor;
+layout(push_constant) uniform Params {
+    vec2 uTexSize;
+    vec2 uInSize;
+    vec2 uOutSize;
+    vec2 uAspect;
+    vec3 uStretch;
+    float uModScale;
+};
+
+layout(location = 0) in vec2 v_uv;
+layout(location = 0) out vec4 FragColor;
 
 vec3 toYuv(vec3 c)
 {

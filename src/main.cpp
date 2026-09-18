@@ -1,9 +1,9 @@
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QByteArrayList>
 #include <QMessageBox>
-#include <QOpenGLContext>
-#include <QSurfaceFormat>
+#include <QVulkanInstance>
 
 int main(int argc, char *argv[])
 {
@@ -12,19 +12,27 @@ int main(int argc, char *argv[])
     if (!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
         qputenv("QT_QPA_PLATFORM", "wayland");
 
-    // The shaders target GLSL 330 core.
-    QSurfaceFormat format;
-    format.setVersion(3, 3);
-    format.setProfile(QSurfaceFormat::CoreProfile);
-    format.setDepthBufferSize(24);
-    format.setStencilBufferSize(8);
-    QSurfaceFormat::setDefaultFormat(format);
-
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("qshadow"));
     QApplication::setOrganizationName(QStringLiteral("QShadow"));
 
-    MainWindow window;
+    QVulkanInstance instance;
+    if (!qEnvironmentVariableIsEmpty("QSHADOW_VULKAN_VALIDATION")) {
+        for (const auto &layer : instance.supportedLayers()) {
+            if (layer.name == QByteArrayLiteral("VK_LAYER_KHRONOS_validation")) {
+                instance.setLayers({QByteArrayLiteral("VK_LAYER_KHRONOS_validation")});
+                break;
+            }
+        }
+    }
+    if (!instance.create()) {
+        QMessageBox::critical(nullptr, QStringLiteral("QShadow"),
+                              QStringLiteral("Failed to initialize Vulkan. Ensure a "
+                                             "working Vulkan driver is installed."));
+        return 1;
+    }
+
+    MainWindow window(&instance);
     window.resize(1280, 720);
     window.show();
 

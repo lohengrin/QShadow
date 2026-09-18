@@ -15,7 +15,7 @@ possible.
   (e.g. 720p source → 1280×720), and the frame keeps its aspect ratio
   (letterboxed if the window doesn't match).
 - **Low latency pipeline** — MJPG capture → libjpeg-turbo decode on its own
-  thread → OpenGL blit. Frames are dropped rather than queued when things get
+  thread → Vulkan blit. Frames are dropped rather than queued when things get
   busy, and the audio buffer is kept short.
 - **Audio** captured from the dongle at native 96 kHz and resampled to the
   host output.
@@ -24,8 +24,9 @@ possible.
   launch.
 - **GPU sharpening & CRT shaders** — pick a post-processing shader from the
   toolbar: nearest-neighbor *None*, *Bilinear smooth*, the pixel-art upscalers
-  **HQ4X** and **xBRZ**, and the CRT emulators **CRT-Geom** and
-  **CRT-Royale**.
+  **HQ4X** and **xBRZ**, the CRT emulators **CRT-Geom** and **CRT-Royale**, and
+  **AMD FSR 1.0** (EASU edge-adaptive upscale + RCAS sharpening) in *Ultra
+  Quality*, *Quality*, *Balanced*, *Performance* and *Sharpen only* variants.
 - **Downscale** — the capture source may have already scaled the signal up to
   fit a fixed resolution; the *Downscale* selector point-decimates the frame
   (off / ×2 / ×4) back to its native grid before the shader runs.
@@ -33,16 +34,23 @@ possible.
 ## Requirements
 
 - Linux with a **Wayland** session
-- Qt 6 (`Core`, `Gui`, `Widgets`, `OpenGLWidgets`, `Multimedia`)
+- Qt 6 (`Core`, `Gui`, `Widgets`, `Multimedia`)
+- Vulkan loader and headers (`libvulkan-dev`) with a Vulkan 1.1-capable GPU
+  driver (Mesa RADV/ANV/llvmpipe, Intel, NVIDIA, …)
 - `libjpeg-turbo`
 - `libasound2-dev` (ALSA)
 - A ShadowCast dongle connected by USB
+
+The shaders are compiled to SPIR-V at build time when `glslc` or
+`glslangValidator` is on `PATH`; otherwise the committed SPIR-V in
+`shaders/spv/` is used, so the shader toolchain is optional.
 
 On Ubuntu/Debian:
 
 ```
 sudo apt install qt6-multimedia-dev libjpeg-turbo8-dev libasound2-dev \
-                 libwayland-dev libegl-dev libgles-dev libdrm-dev libgbm-dev
+                 libvulkan-dev libwayland-dev libegl-dev libgles-dev \
+                 libdrm-dev libgbm-dev
 ```
 
 ## Build
@@ -77,8 +85,12 @@ Make sure the ShadowCast is plugged in before you start it.
   smooth* softens the upscale. *HQ4X* and *xBRZ* are sharp, edge-directed
   scaling (best on clean low-res 240p/480p sources), and *CRT-Geom* /
   *CRT-Royale* simulate an interlaced CRT (scanlines, aperture-grille mask,
-  curvature). GPU shaders need a GL 3.3-core-capable driver, which any modern
-  Mesa/ANGLE stack provides.
+  curvature). The *FSR 1.0* modes run AMD's FidelityFX Super Resolution EASU
+  upscale followed by an RCAS sharpen pass on the GPU — pick a quality tier
+  (*Ultra Quality* … *Performance*) for the internal render ratio, or
+  *Sharpen only* to just apply RCAS at full resolution. Rendering needs a
+  Vulkan 1.1-capable driver, which any modern Mesa/Intel/NVIDIA stack
+  provides.
 - **Downscale** — if the source/capture chain already upscaled the picture to
   a fixed resolution (e.g. 4:3 content blown up to 640×480), set this to the
   matching factor (×2, ×4, or off). The frame is point-decimated back to the

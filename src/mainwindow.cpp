@@ -17,12 +17,14 @@
 #include <QStatusBar>
 #include <QToolBar>
 #include <QVBoxLayout>
+#include <QVulkanInstance>
 #include <QWidget>
 
 #include <chrono>
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(QVulkanInstance *vulkan, QWidget *parent)
     : QMainWindow(parent)
+    , m_vulkanInstance(vulkan)
 {
     buildUi();
     findDevices();
@@ -81,6 +83,16 @@ void MainWindow::buildUi()
                            int(VideoWidget::ShaderMode::CrtGeom));
     m_shaderCombo->addItem(QStringLiteral("CRT-Royale"),
                            int(VideoWidget::ShaderMode::CrtRoyale));
+    m_shaderCombo->addItem(QStringLiteral("FSR 1.0 Ultra Quality"),
+                           int(VideoWidget::ShaderMode::FsrUltraQuality));
+    m_shaderCombo->addItem(QStringLiteral("FSR 1.0 Quality"),
+                           int(VideoWidget::ShaderMode::FsrQuality));
+    m_shaderCombo->addItem(QStringLiteral("FSR 1.0 Balanced"),
+                           int(VideoWidget::ShaderMode::FsrBalanced));
+    m_shaderCombo->addItem(QStringLiteral("FSR 1.0 Performance"),
+                           int(VideoWidget::ShaderMode::FsrPerformance));
+    m_shaderCombo->addItem(QStringLiteral("FSR 1.0 Sharpen only"),
+                           int(VideoWidget::ShaderMode::FsrSharpenOnly));
     toolbar->addWidget(m_shaderCombo);
 
     toolbar->addSeparator();
@@ -111,8 +123,12 @@ void MainWindow::buildUi()
     m_fullscreenAction->setPriority(QAction::LowPriority);
     layout->addWidget(toolbar);
 
-    m_video = new VideoWidget(central);
-    layout->addWidget(m_video, 1);
+    m_video = new VideoWidget();
+    if (m_vulkanInstance)
+        m_video->setVulkanInstance(m_vulkanInstance);
+    QWidget *videoContainer = QWidget::createWindowContainer(m_video, central);
+    videoContainer->setFocusPolicy(Qt::StrongFocus);
+    layout->addWidget(videoContainer, 1);
     setCentralWidget(central);
 
     m_status = new QLabel(this);

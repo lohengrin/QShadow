@@ -1,15 +1,23 @@
 # Shader sources and licensing
 
 The files in this directory implement the rendering shader styles shown in the
-toolbar *Shader* combo box. They are sorted into three groups, each with its
-own license terms:
+toolbar *Shader* combo box. They are sorted into groups, each with its own
+license terms.
+
+All shaders are Vulkan GLSL (`#version 450`). The committed `spv/` directory
+holds build-time SPIR-V output used when no shader compiler is installed; it is
+generated from these sources with `glslc`/`glslangValidator` and carries the
+same licenses.
 
 ## Original project shaders
 
-`passthrough.vert`, `passthrough.frag`, `crt-royale.frag`
+`fullscreen.vert`, `passthrough.frag`, `crt-royale.frag`
 
-- `passthrough.*` are the trivial texture blit used for the *None* (nearest)
-  and *Bilinear smooth* modes.
+- `fullscreen.vert` is the shared vertexless fullscreen-triangle vertex shader
+  used by every graphics pass.
+- `passthrough.frag` is the trivial texture blit used for the *None* (nearest)
+  and *Bilinear smooth* modes, the offscreen downscale pass and the final
+  present.
 - `crt-royale.frag` is an original single-pass CRT emulation written for this
   project. It is *inspired by* the appearance of the libretro
   `crt-royale/crt-royale` preset ("fake-bloom": aperture grille, scanlines,
@@ -17,6 +25,16 @@ own license terms:
   source code. The upstream shader is a multi-pass pipeline with offscreen
   buffers and cannot be used as-is in this app; this file only mimics the
   projected look. Owned by this project.
+
+## AMD FidelityFX Super Resolution 1.0 — MIT
+
+`fsr_easu.comp`, `fsr_rcas.comp` (headers vendored under `../third_party/fsr/`)
+
+- The EASU and RCAS compute shaders use the FidelityFX FSR 1.0 shader headers
+  `ffx_a.h` and `ffx_fsr1.h`.
+- Copyright (C) 2021 Advanced Micro Devices, Inc. All rights reserved.
+- Licensed under the MIT License; the full text is in
+  `../third_party/fsr/license.txt`.
 
 ## hq4x — MIT
 

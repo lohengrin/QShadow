@@ -77,15 +77,18 @@ void Decoder::run()
 
         jpeg_mem_src(&cinfo, src, srcLen);
         if (jpeg_read_header(&cinfo, TRUE) == JPEG_HEADER_OK) {
-            cinfo.out_color_space = JCS_RGB;
+            cinfo.out_color_space = JCS_EXT_RGBA;
             jpeg_start_decompress(&cinfo);
 
             const int w = int(cinfo.output_width);
             const int h = int(cinfo.output_height);
             if (m_frame.isNull() || m_frame.width() != w || m_frame.height() != h
-                || m_frame.format() != QImage::Format_RGB888)
-                m_frame = QImage(w, h, QImage::Format_RGB888);
+                || m_frame.format() != QImage::Format_RGBA8888)
+                m_frame = QImage(w, h, QImage::Format_RGBA8888);
 
+            // RGBA8888 is tightly packed (one pixel per uint32), so every row
+            // starts at a 4-byte-aligned offset: the Vulkan upload path can use
+            // a single contiguous copy with bufferRowLength == width.
             JSAMPROW row = m_frame.bits();
             while (cinfo.output_scanline < cinfo.output_height) {
                 jpeg_read_scanlines(&cinfo, &row, 1);

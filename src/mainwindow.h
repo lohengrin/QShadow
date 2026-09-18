@@ -15,11 +15,12 @@ class QCheckBox;
 class QCloseEvent;
 class QLabel;
 class QSlider;
+class QVulkanInstance;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QVulkanInstance *vulkan = nullptr, QWidget *parent = nullptr);
     ~MainWindow() override;
 
 protected:
@@ -43,6 +44,7 @@ private:
     QList<QSize> m_sizes;
     int m_audioCard = -1;
 
+    QVulkanInstance *m_vulkanInstance = nullptr;
     VideoWidget *m_video = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
