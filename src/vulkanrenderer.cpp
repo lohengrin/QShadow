@@ -1079,8 +1079,9 @@ void VulkanRenderer::startNextFrame()
     QSize finalSize = srcSize;
     bool fsrActive = false;
     const bool sharpOnly = mode == int(VideoWidget::ShaderMode::FsrSharpenOnly);
-    if (isFsrMode(mode)) {
-        const QSize fsrOut = sharpOnly ? srcSize : fsrUpscaleSize(srcSize, targetSize, mode);
+    if (VideoWidget::isFsrMode(mode)) {
+        const QSize fsrOut =
+            sharpOnly ? srcSize : VideoWidget::fsrUpscaleSize(srcSize, targetSize, mode);
         const bool doUpscale =
             fsrOut.width() > srcSize.width() || fsrOut.height() > srcSize.height();
         if (sharpOnly || doUpscale) {
@@ -1234,53 +1235,3 @@ void VulkanRenderer::startNextFrame()
     m_win->frameReady();
 }
 
-// ---------------------------------------------------------------------------
-// FSR helpers
-// ---------------------------------------------------------------------------
-
-bool VulkanRenderer::isFsrMode(int mode)
-{
-    return mode >= int(VideoWidget::ShaderMode::FsrUltraQuality);
-}
-
-float VulkanRenderer::fsrPresetRatio(int mode)
-{
-    switch (mode) {
-    case int(VideoWidget::ShaderMode::FsrUltraQuality):
-        return 1.30f;
-    case int(VideoWidget::ShaderMode::FsrQuality):
-        return 1.50f;
-    case int(VideoWidget::ShaderMode::FsrBalanced):
-        return 1.70f;
-    case int(VideoWidget::ShaderMode::FsrPerformance):
-        return 2.00f;
-    default:
-        return 1.0f;
-    }
-}
-
-int VulkanRenderer::roundToEven(float v)
-{
-    int r = qRound(v);
-    if (r & 1) {
-        if (v > float(r))
-            r += 1;
-        else
-            r -= 1;
-    }
-    return std::max(r, 2);
-}
-
-QSize VulkanRenderer::fsrUpscaleSize(const QSize &src, const QSize &target, int mode)
-{
-    if (mode == int(VideoWidget::ShaderMode::FsrSharpenOnly))
-        return src;
-    const float ratio = fsrPresetRatio(mode);
-    const int w =
-        std::min(target.width(),
-                 std::max(std::max(2, src.width()), roundToEven(float(src.width()) * ratio)));
-    const int h =
-        std::min(target.height(),
-                 std::max(std::max(2, src.height()), roundToEven(float(src.height()) * ratio)));
-    return QSize(w, h);
-}

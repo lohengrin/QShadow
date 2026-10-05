@@ -85,10 +85,6 @@ private:
     VkShaderModule createShaderModule(const char *resource);
     std::uint32_t findMemoryType(std::uint32_t typeBits, VkMemoryPropertyFlags required,
                                  VkMemoryPropertyFlags preferred) const;
-    static bool isFsrMode(int mode);
-    static float fsrPresetRatio(int mode);
-    static QSize fsrUpscaleSize(const QSize &src, const QSize &target, int mode);
-    static int roundToEven(float v);
 
     void createImage(VkFormat format, const QSize &size, VkImageUsageFlags usage,
                      VkSampleCountFlagBits samples, ImageObj *out);
