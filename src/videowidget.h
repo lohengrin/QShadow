@@ -35,6 +35,17 @@ public:
     explicit VideoWidget(QWindow *parent = nullptr);
     ~VideoWidget() override;
 
+    // Canonical per-mode sizing. The renderer and the "Fit" toolbar action both
+    // use these so the 1:1 target window size always matches the pipeline.
+    static bool isFsrMode(int mode);
+    static float fsrPresetRatio(int mode);
+    // FSR output for a src frame inside a given target, capped by the target.
+    static QSize fsrUpscaleSize(const QSize &src, const QSize &target, int mode);
+    // The pipeline's native output size for a decoded frame in the current
+    // mode/downscale, uncapped: what a 1:1 ("Fit") window should show.
+    static QSize pipelineOutputSize(const QSize &frame, int mode, int downscale);
+    static int roundToEven(float v);
+
     // State shared with the renderer. Fields are atomics so the GUI thread can
     // update them without locking while the render thread reads them.
     struct State {
