@@ -1,5 +1,7 @@
 #pragma once
 
+#include "videoframe.h"
+
 #include <QImage>
 #include <QRect>
 #include <QSize>
@@ -70,6 +72,7 @@ private:
         VkDescriptorSet gfxSet = VK_NULL_HANDLE;
         VkDescriptorSet downSet = VK_NULL_HANDLE;
         VkDescriptorSet compSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+        VkDescriptorSet yuvSet = VK_NULL_HANDLE;
     };
 
     VideoWidget *m_win;
@@ -98,6 +101,7 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     void ensureFrameResources(const QSize &size);
     void ensureDownResources(const QSize &size);
     void ensureFsrResources(const QSize &size);
+    void ensureYuvResources(const VideoFrame &frame);
     void ensureStaging(VkDeviceSize needed, PerSwap *slot);
 
     void transition(VkCommandBuffer cb, VkImage img, VkImageLayout oldLayout,
@@ -106,11 +110,14 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                     VkPipelineStageFlags dstStage);
 
     VkPipeline createGfxPipeline(const char *fragResource, VkRenderPass renderPass, bool hasDepth);
-    VkPipeline createComputePipeline(const char *compResource);
+    VkPipeline createComputePipeline(const char *compResource, VkPipelineLayout layout = VK_NULL_HANDLE);
     void destroyPipeline(VkPipeline &pipe);
 
     // ---- per-frame helpers ----
     void uploadFrame(const QImage &img, PerSwap *slot, VkCommandBuffer cb);
+    // Planar YUV frame: upload the three planes, then convert to RGBA into
+    // m_frame with a compute pass so everything downstream is unchanged.
+    void uploadYuvFrame(const VideoFrame &frame, PerSwap *slot, VkCommandBuffer cb);
     void updateGfxDescriptors(VkDescriptorSet set, VkImageView srcView, VkSampler srcSampler);
     void updateCompDescriptors(VkDescriptorSet compSet, VkBuffer ubo, VkImageView inputView,
                                VkImageView outputView);
@@ -142,6 +149,14 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     std::array<VkPipeline, 5> m_pipeSwap = {};
     VkPipeline m_pipeEasu = VK_NULL_HANDLE;
     VkPipeline m_pipeRcas = VK_NULL_HANDLE;
+
+    // GPU YUV -> RGBA conversion (planar JPEG frames).
+    VkDescriptorSetLayout m_yuvSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_yuvPipeLayout = VK_NULL_HANDLE;
+    VkPipeline m_pipeYuv = VK_NULL_HANDLE;
+    bool m_yuvOk = false;
+    ImageObj m_yuv[3];       // Y, Cb, Cr (R8_UNORM)
+    QSize m_yuvSize[3];
 
     std::vector<PerSwap> m_perSwap;
 

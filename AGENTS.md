@@ -8,7 +8,11 @@ Qt6 desktop application that captures video and audio from a GENKI ShadowCast
 USB capture dongle (`298f:1996`, uvcvideo + USB-audio) and displays it on the
 host with minimal latency.
 
-- Video: V4L2 MJPG → libjpeg-turbo decode, or uncompressed YUYV (BT.601
+- Video: V4L2 MJPG → libjpeg-turbo decode to planar Y/Cb/Cr (raw data, no CPU
+  colour conversion) that a compute shader (`shaders/yuv2rgb.comp`) converts
+  to RGBA on the GPU (falls back to CPU RGBA decode for non-YCbCr JPEGs or if
+  the GPU path is unavailable; `QSHADOW_CPU_CONVERT=1` forces the fallback), or
+  uncompressed YUYV (BT.601
   limited range, CPU-converted to RGBA in the decoder thread; artifact-free but
   USB 2.0 limits it to ≤720x480@30 / 720x576@25 / 800x600@20 / 1280x720@10)
   → Vulkan (QVulkanWindow) display,

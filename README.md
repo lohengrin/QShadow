@@ -20,7 +20,10 @@ possible.
   low resolutions (e.g. 720×480 @ 30 fps, 720×576 @ 25, 800×600 @ 20,
   1280×720 @ 10) — ideal for retro / SD sources.
 - **Low latency pipeline** — MJPG capture → libjpeg-turbo decode (or YUYV →
-  RGB conversion) on its own thread → Vulkan blit. Frames are dropped rather than queued when things get
+  RGB conversion) on its own thread → Vulkan blit. MJPG frames are decoded to
+  planar YUV and converted to RGB by a GPU compute shader, which skips the CPU
+  colour conversion and halves the data uploaded (set `QSHADOW_CPU_CONVERT=1`
+  to force the CPU path). Frames are dropped rather than queued when things get
   busy, and the audio buffer is kept short.
 - **Audio** captured from the dongle at native 96 kHz and resampled to the
   host output. The resampling ratio is nudged by at most ±0.5% to absorb clock

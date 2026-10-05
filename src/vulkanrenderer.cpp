@@ -25,9 +25,14 @@ constexpr VkDeviceSize kUboSize = 256;
 constexpr VkPipelineStageFlags kSharedImageReaders =
     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
+constexpr VkFormat kPlaneFormat = VK_FORMAT_R8_UNORM;
+
+// STORAGE: the YUV->RGBA compute pass writes the frame image directly.
 constexpr VkImageUsageFlags kFrameUsage =
     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+constexpr VkImageUsageFlags kPlaneUsage =
+    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 constexpr VkImageUsageFlags kDownUsage =
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -384,7 +389,7 @@ VkPipeline VulkanRenderer::createGfxPipeline(const char *fragResource, VkRenderP
     return pipe;
 }
 
-VkPipeline VulkanRenderer::createComputePipeline(const char *compResource)
+VkPipeline VulkanRenderer::createComputePipeline(const char *compResource, VkPipelineLayout layout)
 {
     VkShaderModule cs = createShaderModule(compResource);
     if (!cs)
@@ -399,7 +404,7 @@ VkPipeline VulkanRenderer::createComputePipeline(const char *compResource)
     VkComputePipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     info.stage = stage;
-    info.layout = m_compPipeLayout;
+    info.layout = layout ? layout : m_compPipeLayout;
 
     VkPipeline pipe = VK_NULL_HANDLE;
     const VkResult res =
@@ -521,6 +526,44 @@ void VulkanRenderer::initResources()
     m_pipeEasu = createComputePipeline(":/shaders/fsr_easu.comp.spv");
     m_pipeRcas = createComputePipeline(":/shaders/fsr_rcas.comp.spv");
 
+    // GPU YUV -> RGBA: needs rgba8 storage images and sampled/uploadable R8
+    // planes (rgba8 storage is mandatory in Vulkan; checked anyway).
+    {
+        VkFormatProperties rgba{};
+        VkFormatProperties r8{};
+        f->vkGetPhysicalDeviceFormatProperties(m_win->physicalDevice(), kFrameFormat, &rgba);
+        f->vkGetPhysicalDeviceFormatProperties(m_win->physicalDevice(), kPlaneFormat, &r8);
+        const bool formatsOk =
+            (rgba.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)
+            && (r8.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)
+            && (r8.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
+            && (r8.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT);
+
+        const VkDescriptorSetLayoutBinding yuvBindings[] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        };
+        VkDescriptorSetLayoutCreateInfo yli{};
+        yli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        yli.bindingCount = 4;
+        yli.pBindings = yuvBindings;
+        m_d->vkCreateDescriptorSetLayout(m_win->device(), &yli, nullptr, &m_yuvSetLayout);
+
+        VkPipelineLayoutCreateInfo ypl{};
+        ypl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        ypl.setLayoutCount = 1;
+        ypl.pSetLayouts = &m_yuvSetLayout;
+        m_d->vkCreatePipelineLayout(m_win->device(), &ypl, nullptr, &m_yuvPipeLayout);
+
+        m_pipeYuv = createComputePipeline(":/shaders/yuv2rgb.comp.spv", m_yuvPipeLayout);
+        m_yuvOk = formatsOk && m_pipeYuv != VK_NULL_HANDLE;
+        if (!m_yuvOk)
+            qWarning() << "QShadow: GPU YUV conversion unavailable; converting on the CPU";
+        m_win->setGpuYuvSupported(m_yuvOk);
+    }
+
     // hq4x lookup table.
     QImage lutImg(QStringLiteral(":/shaders/hq4x.png"));
     if (!lutImg.isNull()) {
@@ -537,13 +580,13 @@ void VulkanRenderer::initSwapChainResources()
     m_perSwap.resize(std::size_t(n));
 
     VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, std::uint32_t(6u * n)},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, std::uint32_t(9u * n)},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, std::uint32_t(2u * n)},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, std::uint32_t(2u * n)},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, std::uint32_t(3u * n)},
     };
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool.maxSets = std::uint32_t(4u * n);
+    pool.maxSets = std::uint32_t(5u * n);
     pool.poolSizeCount = 3;
     pool.pPoolSizes = poolSizes;
     m_d->vkCreateDescriptorPool(m_win->device(), &pool, nullptr, &m_pool);
@@ -555,18 +598,21 @@ void VulkanRenderer::initSwapChainResources()
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &slot.ubo[b], &slot.uboMem[b],
                          &slot.uboMapped[b]);
 
-        VkDescriptorSetLayout layouts[4] = {m_texLayout, m_texLayout, m_compLayout, m_compLayout};
-        VkDescriptorSet sets[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        VkDescriptorSetLayout layouts[5] = {m_texLayout, m_texLayout, m_compLayout, m_compLayout,
+                                            m_yuvSetLayout};
+        VkDescriptorSet sets[5] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                   VK_NULL_HANDLE, VK_NULL_HANDLE};
         VkDescriptorSetAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         ai.descriptorPool = m_pool;
-        ai.descriptorSetCount = 4;
+        ai.descriptorSetCount = 5;
         ai.pSetLayouts = layouts;
         if (m_d->vkAllocateDescriptorSets(m_win->device(), &ai, sets) == VK_SUCCESS) {
             slot.gfxSet = sets[0];
             slot.downSet = sets[1];
             slot.compSets[0] = sets[2];
             slot.compSets[1] = sets[3];
+            slot.yuvSet = sets[4];
         }
     }
 
@@ -596,6 +642,8 @@ void VulkanRenderer::releaseResources()
 {
     waitIdle();
 
+    m_win->setGpuYuvSupported(false);
+    destroyPipeline(m_pipeYuv);
     destroyPipeline(m_pipeRcas);
     destroyPipeline(m_pipeEasu);
     destroyPipeline(m_pipeDown);
@@ -609,12 +657,18 @@ void VulkanRenderer::releaseResources()
         m_offscreenPass = VK_NULL_HANDLE;
     }
 
+    for (ImageObj &plane : m_yuv)
+        destroyImage(plane);
     destroyImage(m_fsrB);
     destroyImage(m_fsrA);
     destroyImage(m_down);
     destroyImage(m_frame);
     destroyImage(m_lut);
 
+    if (m_yuvPipeLayout)
+        m_d->vkDestroyPipelineLayout(m_win->device(), m_yuvPipeLayout, nullptr);
+    if (m_yuvSetLayout)
+        m_d->vkDestroyDescriptorSetLayout(m_win->device(), m_yuvSetLayout, nullptr);
     if (m_compPipeLayout)
         m_d->vkDestroyPipelineLayout(m_win->device(), m_compPipeLayout, nullptr);
     if (m_gfxPipeLayout)
@@ -629,6 +683,11 @@ void VulkanRenderer::releaseResources()
         m_d->vkDestroySampler(m_win->device(), m_samplerNearest, nullptr);
 
     m_downFbo = VK_NULL_HANDLE;
+    m_yuvPipeLayout = VK_NULL_HANDLE;
+    m_yuvSetLayout = VK_NULL_HANDLE;
+    m_yuvOk = false;
+    for (QSize &s : m_yuvSize)
+        s = QSize();
     m_frameSize = m_downSize = m_fsrSize = QSize();
     m_frameLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     m_d = nullptr;
@@ -817,6 +876,120 @@ void VulkanRenderer::uploadFrame(const QImage &img, PerSwap *slot, VkCommandBuff
     transition(cb, m_frame.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    m_frameLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+}
+
+void VulkanRenderer::ensureYuvResources(const VideoFrame &frame)
+{
+    for (int i = 0; i < 3; ++i) {
+        const QSize size(frame.planes[i].width, frame.planes[i].height);
+        if (m_yuv[i].image && m_yuvSize[i] == size)
+            continue;
+        if (m_yuv[i].image) {
+            waitIdle();
+            destroyImage(m_yuv[i]);
+        }
+        m_yuvSize[i] = size;
+        createImage(kPlaneFormat, size, kPlaneUsage, VK_SAMPLE_COUNT_1_BIT, &m_yuv[i]);
+    }
+}
+
+void VulkanRenderer::uploadYuvFrame(const VideoFrame &frame, PerSwap *slot, VkCommandBuffer cb)
+{
+    const QSize size = frame.size();
+    if (size.isEmpty())
+        return;
+    ensureFrameResources(size);
+    ensureYuvResources(frame);
+    for (const ImageObj &plane : m_yuv) {
+        if (!plane.image)
+            return;
+    }
+
+    // All three planes go through one staging buffer, each at a 16-byte aligned
+    // offset; rows keep the decoder's padded stride (bufferRowLength).
+    VkDeviceSize offset[3];
+    VkDeviceSize total = 0;
+    for (int i = 0; i < 3; ++i) {
+        offset[i] = total;
+        const VkDeviceSize bytes = VkDeviceSize(frame.planes[i].stride) * VkDeviceSize(frame.planes[i].height);
+        total += (bytes + 15) & ~VkDeviceSize(15);
+    }
+    ensureStaging(total, slot);
+    if (!slot->stagingMapped)
+        return;
+    for (int i = 0; i < 3; ++i) {
+        const VideoFrame::Plane &p = frame.planes[i];
+        std::memcpy(static_cast<char *>(slot->stagingMapped) + offset[i], p.data.constData(),
+                    std::size_t(p.stride) * std::size_t(p.height));
+    }
+    flushRange(slot->stagingMem, VK_WHOLE_SIZE);
+
+    // The plane images and m_frame are shared by every in-flight frame, so the
+    // previous frame's shader reads must finish before they are overwritten.
+    // Contents are fully replaced each time, hence UNDEFINED as the old layout.
+    for (int i = 0; i < 3; ++i) {
+        transition(cb, m_yuv[i].image, VK_IMAGE_LAYOUT_UNDEFINED,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   kSharedImageReaders | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy region{};
+        region.bufferOffset = offset[i];
+        region.bufferRowLength = std::uint32_t(frame.planes[i].stride);
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = {std::uint32_t(frame.planes[i].width),
+                              std::uint32_t(frame.planes[i].height), 1};
+        m_d->vkCmdCopyBufferToImage(cb, slot->staging, m_yuv[i].image,
+                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        transition(cb, m_yuv[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
+
+    transition(cb, m_frame.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+               VK_ACCESS_SHADER_WRITE_BIT, kSharedImageReaders | VK_PIPELINE_STAGE_TRANSFER_BIT,
+               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    VkDescriptorImageInfo planeInfo[3]{};
+    for (int i = 0; i < 3; ++i) {
+        // Y is fetched texel-exact; the subsampled chroma planes are filtered.
+        planeInfo[i].sampler = i == 0 ? m_samplerNearest : m_samplerLinear;
+        planeInfo[i].imageView = m_yuv[i].view;
+        planeInfo[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    VkDescriptorImageInfo outInfo{};
+    outInfo.imageView = m_frame.view;
+    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[4]{};
+    for (int i = 0; i < 3; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = slot->yuvSet;
+        writes[i].dstBinding = std::uint32_t(i);
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &planeInfo[i];
+    }
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = slot->yuvSet;
+    writes[3].dstBinding = 3;
+    writes[3].descriptorCount = 1;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[3].pImageInfo = &outInfo;
+    m_d->vkUpdateDescriptorSets(m_win->device(), 4, writes, 0, nullptr);
+
+    m_d->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeYuv);
+    m_d->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_yuvPipeLayout, 0, 1,
+                                 &slot->yuvSet, 0, nullptr);
+    m_d->vkCmdDispatch(cb, (std::uint32_t(size.width()) + 7) / 8,
+                       (std::uint32_t(size.height()) + 7) / 8, 1);
+
+    transition(cb, m_frame.image, VK_IMAGE_LAYOUT_GENERAL,
+               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+               VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     m_frameLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
@@ -1050,11 +1223,17 @@ void VulkanRenderer::startNextFrame()
     PerSwap *slot = &m_perSwap[idx];
     VkCommandBuffer cb = m_win->currentCommandBuffer();
 
-    QImage frame;
+    VideoFramePtr frame;
     std::chrono::steady_clock::time_point stamp;
     const bool newFrame = m_win->takePendingFrame(&frame, &stamp);
-    if (newFrame)
-        uploadFrame(frame, slot, cb);
+    if (newFrame) {
+        if (frame->kind == VideoFrame::Kind::Yuv) {
+            if (m_yuvOk)
+                uploadYuvFrame(*frame, slot, cb);
+        } else {
+            uploadFrame(frame->rgba, slot, cb);
+        }
+    }
 
     const QSize outSize = m_win->swapChainImageSize();
     if (outSize.isEmpty())
