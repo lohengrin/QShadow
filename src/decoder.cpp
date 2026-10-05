@@ -239,7 +239,7 @@ void Decoder::convertYuyv(const Frame &frame, QImage &dst)
             const int rc = 409 * v + 128;
             const int gc = -100 * u - 208 * v + 128;
             const int bc = 516 * u + 128;
-            for (int k = 0; k < 2; ++k) {
+            for (int k = 0; k < 2 && x + k < w; ++k) { // w may be odd: no pixel past the row
                 const int c = 298 * (s[k * 2] - 16);
                 // Memory order R,G,B,A == RGBA8888 on little-endian.
                 d[x + k] = clamp8((c + rc) >> 8) | (clamp8((c + gc) >> 8) << 8)
@@ -272,8 +272,19 @@ void Decoder::run()
         if (frame.format == device::PixelFormat::Yuyv) {
             w = frame.width;
             h = frame.height;
-            out = acquireRgba(w, h);
-            convertYuyv(frame, out->rgba);
+            if (m_gpuYuv && m_gpuYuv() && (w % 2) == 0 && (frame.stride % 4) == 0) {
+                // The GPU converts: hand over the capture buffer as it is (a
+                // shared reference, no copy). Texels are 4 bytes = 2 pixels.
+                out = std::make_shared<VideoFrame>();
+                out->kind = VideoFrame::Kind::Yuyv;
+                out->planes[0].width = w;
+                out->planes[0].height = h;
+                out->planes[0].stride = frame.stride;
+                out->planes[0].data = frame.data;
+            } else {
+                out = acquireRgba(w, h);
+                convertYuyv(frame, out->rgba);
+            }
             ok = true;
         } else if (headerJpeg(cinfo, err, frame)) {
             const bool raw = m_gpuYuv && m_gpuYuv() && isPlanarYuv(cinfo);
@@ -298,7 +309,7 @@ void Decoder::run()
         if (ok) {
             m_stats->frameW.store(w);
             m_stats->frameH.store(h);
-            m_stats->frameYuv.store(out->kind == VideoFrame::Kind::Yuv);
+            m_stats->frameYuv.store(out->kind != VideoFrame::Kind::Rgba);
             m_stats->decoded.fetch_add(1);
             const auto t1 = std::chrono::steady_clock::now();
             m_stats->decodeNs.fetch_add(uint64_t(

@@ -7,6 +7,7 @@
 #include <QSize>
 #include <QString>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -113,6 +114,10 @@ public:
 private:
     void run();
     QDebug warn();
+    // A QByteArray holding `used` bytes copied from `src`, recycled from a small
+    // pool: a pooled array is free again once every consumer has dropped its
+    // (implicitly shared) copy. Falls back to a fresh allocation if all are busy.
+    QByteArray takeBuffer(const char *src, size_t used);
 
     QString m_devicePath;
     QSize m_targetSize;
@@ -125,6 +130,8 @@ private:
 
     int m_fd = -1;
     int m_bufferCount = 0;
+    // Capture queue (2) + decoder + widget pending + renderer + slack.
+    std::array<QByteArray, 8> m_pool;
     struct Buffer {
         void *start = nullptr;
         size_t length = 0;

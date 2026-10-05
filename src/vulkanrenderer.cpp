@@ -40,6 +40,69 @@ constexpr VkImageUsageFlags kFsrUsage =
     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
+// CPU port of the crt-geom maxscale() vertex block, identical to the old
+// OpenGL implementation. Depends only on the output aspect ratio.
+void crtGeomStretch(float aspect, float out[3])
+{
+    const float d = 1.6f;
+    const float R = 2.0f;
+    const float cosA = 1.001f;
+    const float sinA = 0.001f;
+
+    const auto intersect = [&](float x, float y) {
+        const float xy = x * x + y * y;
+        const float A = xy + d * d;
+        const float B = 2.0f * (R * (x * sinA + y * sinA - d * cosA * cosA) - d * d);
+        const float C = d * d + 2.0f * R * d * cosA * cosA;
+        return (-B - std::sqrt(B * B - 4.0f * A * C)) / (2.0f * A);
+    };
+    const auto bkwtrans = [&](float px, float py) {
+        const float c = intersect(px, py);
+        float ux = c * px + R * sinA;
+        float uy = c * py + R * sinA;
+        ux /= R;
+        uy /= R;
+        const float t0 = sinA / cosA;
+        const float p0x = ux / cosA;
+        const float p0y = uy / cosA;
+        const float A = t0 * t0 + t0 * t0 + 1.0f;
+        const float B = -2.0f * (p0x * t0 + p0y * t0);
+        const float C = p0x * p0x + p0y * p0y - 1.0f;
+        const float a = (-B + std::sqrt(B * B - 4.0f * A * C)) / (2.0f * A);
+        ux = (ux - a * sinA) / cosA;
+        uy = (uy - a * sinA) / cosA;
+        const float r = std::max(std::abs(R * std::acos(a)), 1e-5f);
+        const float s = std::sin(r / R) / r;
+        return std::pair<float, float>(ux * s, uy * s);
+    };
+    const auto fwtrans = [&](float ux, float uy) {
+        const float r = std::max(std::sqrt(ux * ux + uy * uy), 1e-5f);
+        const float sr = std::sin(r / R) / r;
+        ux *= sr;
+        uy *= sr;
+        const float x = 1.0f - std::cos(r / R);
+        const float D = d / R + x * cosA * cosA + ux * sinA + uy * sinA;
+        return std::pair<float, float>(d * (ux * cosA - x * sinA) / D,
+                                       d * (uy * cosA - x * sinA) / D);
+    };
+
+    const auto c = bkwtrans(-R * sinA / (1.0f + R / d * cosA * cosA),
+                            -R * sinA / (1.0f + R / d * cosA * cosA));
+    const float aa = 0.5f * aspect;
+    const auto lo = fwtrans(-aa, c.second);
+    const auto hi = fwtrans(aa, c.second);
+    const auto lo2 = fwtrans(c.first, -0.5f);
+    const auto hi2 = fwtrans(c.first, 0.5f);
+
+    const float loX = lo.first / aspect;
+    const float hiX = hi.first / aspect;
+    const float loY = lo2.second;
+    const float hiY = hi2.second;
+    out[0] = (hiX + loX) * aspect * 0.5f;
+    out[1] = (hiY + loY) * 0.5f;
+    out[2] = std::max(hiX - loX, hiY - loY);
+}
+
 const char *programResource(VulkanRenderer::Program program)
 {
     switch (program) {
@@ -558,7 +621,8 @@ void VulkanRenderer::initResources()
         m_d->vkCreatePipelineLayout(m_win->device(), &ypl, nullptr, &m_yuvPipeLayout);
 
         m_pipeYuv = createComputePipeline(":/shaders/yuv2rgb.comp.spv", m_yuvPipeLayout);
-        m_yuvOk = formatsOk && m_pipeYuv != VK_NULL_HANDLE;
+        m_pipeYuyv = createComputePipeline(":/shaders/yuyv2rgb.comp.spv", m_yuvPipeLayout);
+        m_yuvOk = formatsOk && m_pipeYuv != VK_NULL_HANDLE && m_pipeYuyv != VK_NULL_HANDLE;
         if (!m_yuvOk)
             qWarning() << "QShadow: GPU YUV conversion unavailable; converting on the CPU";
         m_win->setGpuYuvSupported(m_yuvOk);
@@ -643,6 +707,7 @@ void VulkanRenderer::releaseResources()
     waitIdle();
 
     m_win->setGpuYuvSupported(false);
+    destroyPipeline(m_pipeYuyv);
     destroyPipeline(m_pipeYuv);
     destroyPipeline(m_pipeRcas);
     destroyPipeline(m_pipeEasu);
@@ -659,6 +724,7 @@ void VulkanRenderer::releaseResources()
 
     for (ImageObj &plane : m_yuv)
         destroyImage(plane);
+    destroyImage(m_yuyv);
     destroyImage(m_fsrB);
     destroyImage(m_fsrA);
     destroyImage(m_down);
@@ -688,6 +754,7 @@ void VulkanRenderer::releaseResources()
     m_yuvOk = false;
     for (QSize &s : m_yuvSize)
         s = QSize();
+    m_yuyvSize = QSize();
     m_frameSize = m_downSize = m_fsrSize = QSize();
     m_frameLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     m_d = nullptr;
@@ -949,10 +1016,6 @@ void VulkanRenderer::uploadYuvFrame(const VideoFrame &frame, PerSwap *slot, VkCo
                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
 
-    transition(cb, m_frame.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
-               VK_ACCESS_SHADER_WRITE_BIT, kSharedImageReaders | VK_PIPELINE_STAGE_TRANSFER_BIT,
-               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-
     VkDescriptorImageInfo planeInfo[3]{};
     for (int i = 0; i < 3; ++i) {
         // Y is fetched texel-exact; the subsampled chroma planes are filtered.
@@ -960,11 +1023,7 @@ void VulkanRenderer::uploadYuvFrame(const VideoFrame &frame, PerSwap *slot, VkCo
         planeInfo[i].imageView = m_yuv[i].view;
         planeInfo[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
-    VkDescriptorImageInfo outInfo{};
-    outInfo.imageView = m_frame.view;
-    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkWriteDescriptorSet writes[4]{};
+    VkWriteDescriptorSet writes[3]{};
     for (int i = 0; i < 3; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = slot->yuvSet;
@@ -973,15 +1032,94 @@ void VulkanRenderer::uploadYuvFrame(const VideoFrame &frame, PerSwap *slot, VkCo
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].pImageInfo = &planeInfo[i];
     }
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = slot->yuvSet;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorCount = 1;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[3].pImageInfo = &outInfo;
-    m_d->vkUpdateDescriptorSets(m_win->device(), 4, writes, 0, nullptr);
+    m_d->vkUpdateDescriptorSets(m_win->device(), 3, writes, 0, nullptr);
 
-    m_d->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeYuv);
+    convertToFrame(cb, slot, m_pipeYuv, size);
+}
+
+void VulkanRenderer::uploadYuyvFrame(const VideoFrame &frame, PerSwap *slot, VkCommandBuffer cb)
+{
+    const QSize size = frame.size();
+    const VideoFrame::Plane &p = frame.planes[0];
+    if (size.isEmpty() || (size.width() & 1) || (p.stride & 3))
+        return;
+    ensureFrameResources(size);
+
+    // One RGBA8 texel holds two pixels (Y0 Cb Y1 Cr).
+    const QSize texels(size.width() / 2, size.height());
+    if (!m_yuyv.image || m_yuyvSize != texels) {
+        if (m_yuyv.image) {
+            waitIdle();
+            destroyImage(m_yuyv);
+        }
+        m_yuyvSize = texels;
+        createImage(kFrameFormat, texels, kPlaneUsage, VK_SAMPLE_COUNT_1_BIT, &m_yuyv);
+    }
+    if (!m_yuyv.image)
+        return;
+
+    const VkDeviceSize bytes = VkDeviceSize(p.stride) * VkDeviceSize(size.height());
+    ensureStaging(bytes, slot);
+    if (!slot->stagingMapped)
+        return;
+    std::memcpy(slot->stagingMapped, p.data.constData(), std::size_t(bytes));
+    flushRange(slot->stagingMem, VK_WHOLE_SIZE);
+
+    // Shared across in-flight frames, like the planar images: see uploadYuvFrame.
+    transition(cb, m_yuyv.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               0, VK_ACCESS_TRANSFER_WRITE_BIT,
+               kSharedImageReaders | VK_PIPELINE_STAGE_TRANSFER_BIT,
+               VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkBufferImageCopy region{};
+    region.bufferRowLength = std::uint32_t(p.stride / 4); // in texels
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {std::uint32_t(texels.width()), std::uint32_t(texels.height()), 1};
+    m_d->vkCmdCopyBufferToImage(cb, slot->staging, m_yuyv.image,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    transition(cb, m_yuyv.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+               VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    VkDescriptorImageInfo info{};
+    info.sampler = m_samplerNearest;
+    info.imageView = m_yuyv.view;
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = slot->yuvSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &info;
+    m_d->vkUpdateDescriptorSets(m_win->device(), 1, &write, 0, nullptr);
+
+    convertToFrame(cb, slot, m_pipeYuyv, size);
+}
+
+void VulkanRenderer::convertToFrame(VkCommandBuffer cb, PerSwap *slot, VkPipeline pipe,
+                                    const QSize &size)
+{
+    // m_frame is shared by every in-flight frame: wait for the previous frame's
+    // shader reads before overwriting. Contents are fully replaced, so UNDEFINED.
+    transition(cb, m_frame.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+               VK_ACCESS_SHADER_WRITE_BIT, kSharedImageReaders | VK_PIPELINE_STAGE_TRANSFER_BIT,
+               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    VkDescriptorImageInfo outInfo{};
+    outInfo.imageView = m_frame.view;
+    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = slot->yuvSet;
+    write.dstBinding = 3;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    write.pImageInfo = &outInfo;
+    m_d->vkUpdateDescriptorSets(m_win->device(), 1, &write, 0, nullptr);
+
+    m_d->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
     m_d->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_yuvPipeLayout, 0, 1,
                                  &slot->yuvSet, 0, nullptr);
     m_d->vkCmdDispatch(cb, (std::uint32_t(size.width()) + 7) / 8,
@@ -1230,6 +1368,9 @@ void VulkanRenderer::startNextFrame()
         if (frame->kind == VideoFrame::Kind::Yuv) {
             if (m_yuvOk)
                 uploadYuvFrame(*frame, slot, cb);
+        } else if (frame->kind == VideoFrame::Kind::Yuyv) {
+            if (m_yuvOk)
+                uploadYuyvFrame(*frame, slot, cb);
         } else {
             uploadFrame(frame->rgba, slot, cb);
         }
@@ -1242,10 +1383,10 @@ void VulkanRenderer::startNextFrame()
     const bool haveFrame = m_frame.image && !m_frameSize.isEmpty();
 
     // Letterboxed target rect.
-    const bool aspect = m_win->m_state.preserveAspect.load();
+    const bool preserveAspect = m_win->m_state.preserveAspect.load();
     QSize targetSize = outSize;
     QRect target(0, 0, outSize.width(), outSize.height());
-    if (haveFrame && aspect) {
+    if (haveFrame && preserveAspect) {
         const QSize scaled = m_frameSize.scaled(outSize, Qt::KeepAspectRatio);
         targetSize = scaled;
         target = QRect((outSize.width() - scaled.width()) / 2,
@@ -1257,173 +1398,120 @@ void VulkanRenderer::startNextFrame()
     const int downscale = m_win->m_state.downscale.load();
 
     if (haveFrame && !targetSize.isEmpty()) {
-    // Optional pre-downscale to the native grid.
-    VkImageView srcView = m_frame.view;
-    QSize srcSize = m_frameSize;
-    if (downscale > 1) {
-        const QSize down(std::max(2, srcSize.width() / downscale),
-                         std::max(2, srcSize.height() / downscale));
-        if (down != srcSize) {
-            ensureDownResources(down);
-            updateGfxDescriptors(slot->downSet, m_frame.view, m_samplerNearest);
-            recordDownscale(cb, slot, down);
-            srcView = m_down.view;
-            srcSize = down;
-        }
-    }
-
-    // FSR upscale / sharpen.
-    VkImageView finalView = srcView;
-    QSize finalSize = srcSize;
-    bool fsrActive = false;
-    const bool sharpOnly = mode == int(VideoWidget::ShaderMode::FsrSharpenOnly);
-    if (VideoWidget::isFsrMode(mode)) {
-        const QSize fsrOut =
-            sharpOnly ? srcSize : VideoWidget::fsrUpscaleSize(srcSize, targetSize, mode);
-        const bool doUpscale =
-            fsrOut.width() > srcSize.width() || fsrOut.height() > srcSize.height();
-        if (sharpOnly || doUpscale) {
-            ensureFsrResources(fsrOut);
-            fsrActive = true;
-
-            bool easuRan = false;
-            if (fsrOut != srcSize) {
-                transition(cb, m_fsrA.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                           VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-                           kSharedImageReaders, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-                updateCompDescriptors(slot->compSets[0], slot->ubo[0], srcView, m_fsrA.view);
-                writeEasuConsts(slot, srcSize, fsrOut);
-                recordEasu(cb, slot->compSets[0], fsrOut);
-                transition(cb, m_fsrA.image, VK_IMAGE_LAYOUT_GENERAL,
-                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                           VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-                easuRan = true;
+        // Optional pre-downscale to the native grid.
+        VkImageView srcView = m_frame.view;
+        QSize srcSize = m_frameSize;
+        if (downscale > 1) {
+            const QSize down(std::max(2, srcSize.width() / downscale),
+                             std::max(2, srcSize.height() / downscale));
+            if (down != srcSize) {
+                ensureDownResources(down);
+                updateGfxDescriptors(slot->downSet, m_frame.view, m_samplerNearest);
+                recordDownscale(cb, slot, down);
+                srcView = m_down.view;
+                srcSize = down;
             }
-
-            VkImageView rcasIn = easuRan ? m_fsrA.view : srcView;
-            const VkImage rcasOut = easuRan ? m_fsrB.image : m_fsrA.image;
-            VkImageView rcasOutView = easuRan ? m_fsrB.view : m_fsrA.view;
-            const QSize rcasOutSize = easuRan ? fsrOut : srcSize;
-
-            transition(cb, rcasOut, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
-                       VK_ACCESS_SHADER_WRITE_BIT, kSharedImageReaders,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-            updateCompDescriptors(slot->compSets[1], slot->ubo[1], rcasIn, rcasOutView);
-            const float sharpness =
-                mode == int(VideoWidget::ShaderMode::FsrSharpenOnly) ? 0.5f : 1.0f;
-            writeRcasConsts(slot, sharpness);
-            recordRcas(cb, slot->compSets[1], rcasOutSize);
-            transition(cb, rcasOut, VK_IMAGE_LAYOUT_GENERAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
-                       VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-
-            finalView = rcasOutView;
-            finalSize = rcasOutSize;
         }
-    }
 
-    const Program program = [mode]() {
-        switch (mode) {
-        case int(VideoWidget::ShaderMode::Hq4x):
-            return Program::Hq4x;
-        case int(VideoWidget::ShaderMode::Xbrz):
-            return Program::Xbrz;
-        case int(VideoWidget::ShaderMode::CrtGeom):
-            return Program::CrtGeom;
-        case int(VideoWidget::ShaderMode::CrtRoyale):
-            return Program::CrtRoyale;
-        default:
-            return Program::Passthrough;
+        // FSR upscale / sharpen.
+        VkImageView finalView = srcView;
+        QSize finalSize = srcSize;
+        bool fsrActive = false;
+        const bool sharpOnly = mode == int(VideoWidget::ShaderMode::FsrSharpenOnly);
+        if (VideoWidget::isFsrMode(mode)) {
+            const QSize fsrOut =
+                sharpOnly ? srcSize : VideoWidget::fsrUpscaleSize(srcSize, targetSize, mode);
+            const bool doUpscale =
+                fsrOut.width() > srcSize.width() || fsrOut.height() > srcSize.height();
+            if (sharpOnly || doUpscale) {
+                ensureFsrResources(fsrOut);
+                fsrActive = true;
+
+                bool easuRan = false;
+                if (fsrOut != srcSize) {
+                    transition(cb, m_fsrA.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+                               kSharedImageReaders, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                    updateCompDescriptors(slot->compSets[0], slot->ubo[0], srcView, m_fsrA.view);
+                    writeEasuConsts(slot, srcSize, fsrOut);
+                    recordEasu(cb, slot->compSets[0], fsrOut);
+                    transition(cb, m_fsrA.image, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                    easuRan = true;
+                }
+
+                VkImageView rcasIn = easuRan ? m_fsrA.view : srcView;
+                const VkImage rcasOut = easuRan ? m_fsrB.image : m_fsrA.image;
+                VkImageView rcasOutView = easuRan ? m_fsrB.view : m_fsrA.view;
+                const QSize rcasOutSize = easuRan ? fsrOut : srcSize;
+
+                transition(cb, rcasOut, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
+                           VK_ACCESS_SHADER_WRITE_BIT, kSharedImageReaders,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                updateCompDescriptors(slot->compSets[1], slot->ubo[1], rcasIn, rcasOutView);
+                const float sharpness =
+                    mode == int(VideoWidget::ShaderMode::FsrSharpenOnly) ? 0.5f : 1.0f;
+                writeRcasConsts(slot, sharpness);
+                recordRcas(cb, slot->compSets[1], rcasOutSize);
+                transition(cb, rcasOut, VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+                           VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+                finalView = rcasOutView;
+                finalSize = rcasOutSize;
+            }
         }
-    }();
 
-    VkSampler blitSampler = m_samplerLinear;
-    if (mode == int(VideoWidget::ShaderMode::None))
-        blitSampler = m_samplerNearest;
-    if (fsrActive && finalSize == targetSize)
-        blitSampler = m_samplerNearest;
+        const Program program = [mode]() {
+            switch (mode) {
+            case int(VideoWidget::ShaderMode::Hq4x):
+                return Program::Hq4x;
+            case int(VideoWidget::ShaderMode::Xbrz):
+                return Program::Xbrz;
+            case int(VideoWidget::ShaderMode::CrtGeom):
+                return Program::CrtGeom;
+            case int(VideoWidget::ShaderMode::CrtRoyale):
+                return Program::CrtRoyale;
+            default:
+                return Program::Passthrough;
+            }
+        }();
 
-    // Shared program parameters.
-    PushParams pp{};
-    pp.uTexSize[0] = float(finalSize.width());
-    pp.uTexSize[1] = float(finalSize.height());
-    pp.uInSize[0] = float(srcSize.width());
-    pp.uInSize[1] = float(srcSize.height());
-    pp.uOutSize[0] = float(targetSize.width());
-    pp.uOutSize[1] = float(targetSize.height());
-    const float aspect = float(targetSize.width()) / float(std::max(1, targetSize.height()));
-    pp.uAspect[0] = aspect;
-    pp.uAspect[1] = 1.0f;
-    pp.uModScale = float(targetSize.width());
+        VkSampler blitSampler = m_samplerLinear;
+        if (mode == int(VideoWidget::ShaderMode::None))
+            blitSampler = m_samplerNearest;
+        if (fsrActive && finalSize == targetSize)
+            blitSampler = m_samplerNearest;
 
-    if (mode == int(VideoWidget::ShaderMode::CrtGeom)) {
-        // CPU port of the crt-geom maxscale() vertex block, identical to the
-        // old OpenGL implementation.
-        const float d = 1.6f;
-        const float R = 2.0f;
-        const float cosA = 1.001f;
-        const float sinA = 0.001f;
+        // Shared program parameters.
+        PushParams pp{};
+        pp.uTexSize[0] = float(finalSize.width());
+        pp.uTexSize[1] = float(finalSize.height());
+        pp.uInSize[0] = float(srcSize.width());
+        pp.uInSize[1] = float(srcSize.height());
+        pp.uOutSize[0] = float(targetSize.width());
+        pp.uOutSize[1] = float(targetSize.height());
+        const float aspect = float(targetSize.width()) / float(std::max(1, targetSize.height()));
+        pp.uAspect[0] = aspect;
+        pp.uAspect[1] = 1.0f;
+        pp.uModScale = float(targetSize.width());
 
-        const auto intersect = [&](float x, float y) {
-            const float xy = x * x + y * y;
-            const float A = xy + d * d;
-            const float B = 2.0f * (R * (x * sinA + y * sinA - d * cosA * cosA) - d * d);
-            const float C = d * d + 2.0f * R * d * cosA * cosA;
-            return (-B - std::sqrt(B * B - 4.0f * A * C)) / (2.0f * A);
-        };
-        const auto bkwtrans = [&](float px, float py) {
-            const float c = intersect(px, py);
-            float ux = c * px + R * sinA;
-            float uy = c * py + R * sinA;
-            ux /= R;
-            uy /= R;
-            const float t0 = sinA / cosA;
-            const float p0x = ux / cosA;
-            const float p0y = uy / cosA;
-            const float A = t0 * t0 + t0 * t0 + 1.0f;
-            const float B = -2.0f * (p0x * t0 + p0y * t0);
-            const float C = p0x * p0x + p0y * p0y - 1.0f;
-            const float a = (-B + std::sqrt(B * B - 4.0f * A * C)) / (2.0f * A);
-            ux = (ux - a * sinA) / cosA;
-            uy = (uy - a * sinA) / cosA;
-            const float r = std::max(std::abs(R * std::acos(a)), 1e-5f);
-            const float s = std::sin(r / R) / r;
-            return std::pair<float, float>(ux * s, uy * s);
-        };
-        const auto fwtrans = [&](float ux, float uy) {
-            const float r = std::max(std::sqrt(ux * ux + uy * uy), 1e-5f);
-            const float sr = std::sin(r / R) / r;
-            ux *= sr;
-            uy *= sr;
-            const float x = 1.0f - std::cos(r / R);
-            const float D = d / R + x * cosA * cosA + ux * sinA + uy * sinA;
-            return std::pair<float, float>(d * (ux * cosA - x * sinA) / D,
-                                           d * (uy * cosA - x * sinA) / D);
-        };
+        if (mode == int(VideoWidget::ShaderMode::CrtGeom)) {
+            // Only changes with the output aspect ratio, so cache it.
+            if (aspect != m_crtAspect) {
+                crtGeomStretch(aspect, m_crtStretch);
+                m_crtAspect = aspect;
+            }
+            std::copy(m_crtStretch, m_crtStretch + 3, pp.uStretch);
+        }
 
-        const auto c = bkwtrans(-R * sinA / (1.0f + R / d * cosA * cosA),
-                                -R * sinA / (1.0f + R / d * cosA * cosA));
-        const float aa = 0.5f * aspect;
-        const auto lo = fwtrans(-aa, c.second);
-        const auto hi = fwtrans(aa, c.second);
-        const auto lo2 = fwtrans(c.first, -0.5f);
-        const auto hi2 = fwtrans(c.first, 0.5f);
-
-        const float loX = lo.first / aspect;
-        const float hiX = hi.first / aspect;
-        const float loY = lo2.second;
-        const float hiY = hi2.second;
-        pp.uStretch[0] = (hiX + loX) * aspect * 0.5f;
-        pp.uStretch[1] = (hiY + loY) * 0.5f;
-        pp.uStretch[2] = std::max(hiX - loX, hiY - loY);
-    }
-
-    beginSwapPass(cb, outSize);
-    recordBlit(cb, slot, finalView, blitSampler, target, program, pp);
-    endSwapPass(cb);
+        beginSwapPass(cb, outSize);
+        recordBlit(cb, slot, finalView, blitSampler, target, program, pp);
+        endSwapPass(cb);
     } else {
         // Nothing decoded yet: still present a cleared frame.
         beginSwapPass(cb, outSize);

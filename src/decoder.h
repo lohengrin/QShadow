@@ -23,10 +23,10 @@ struct YuvLayout {
 // decoder thread and must be cheap and thread-safe (VideoWidget only stores the
 // newest frame: drop-on-backpressure).
 //
-// MJPG is decoded to planar Y/Cb/Cr and left for the GPU to convert whenever
-// the renderer says it can (setGpuYuvCheck) and the JPEG is plain 3-component
-// YCbCr; that skips the CPU colour conversion + chroma upsampling and halves
-// the bytes uploaded. Anything else (and YUYV) becomes RGBA on the CPU.
+// Whenever the renderer says it can convert on the GPU (setGpuYuvCheck), MJPG
+// is decoded to planar Y/Cb/Cr (if it is plain 3-component YCbCr; that skips
+// the CPU colour conversion + chroma upsampling and halves the bytes uploaded)
+// and YUYV is passed through untouched. Anything else becomes RGBA on the CPU.
 //
 // Frames come from a small pool that is recycled once every other holder has
 // released them, so there is no per-frame allocation or copy.
