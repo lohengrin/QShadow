@@ -62,7 +62,8 @@ private:
     QAction *m_fitAction = nullptr;
 
     Stats m_stats;
-    FrameQueue m_queue{3};
+    // Latest-wins: while the decoder works on one frame at most one more waits.
+    FrameQueue m_queue{2};
     AudioRing m_ring;
 
     Capture *m_capture = nullptr;

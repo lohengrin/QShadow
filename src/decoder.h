@@ -4,18 +4,21 @@
 
 #include <QImage>
 
+#include <array>
 #include <atomic>
+#include <functional>
 #include <thread>
 
-class QObject;
-
 // Decodes MJPG frames (libjpeg-turbo) or converts raw YUYV frames to RGBA on
-// its own thread. Each decoded frame is handed to the GUI thread via a queued
-// QMetaObject call on the target widget, which only ever stores the newest
-// frame (drop-on-backpressure).
+// its own thread. Each decoded frame is handed to the sink callback, which runs
+// on the decoder thread and must be cheap and thread-safe (VideoWidget only
+// stores the newest frame: drop-on-backpressure). Frames are decoded into a
+// small pool of images that is recycled once the consumer has released them,
+// so there is no per-frame allocation or copy.
 class Decoder {
 public:
-    Decoder(FrameQueue *queue, Stats *stats, QObject *frameTarget, const char *slot);
+    using FrameSink = std::function<void(const QImage &)>;
+    Decoder(FrameQueue *queue, Stats *stats, FrameSink sink);
     ~Decoder();
 
     void start();
@@ -24,13 +27,14 @@ public:
 
 private:
     void run();
-    void convertYuyv(const Frame &frame);
+    QImage &acquireImage(int w, int h);
+    void convertYuyv(const Frame &frame, QImage &dst);
 
     FrameQueue *m_queue;
     Stats *m_stats;
-    QObject *m_target;
-    const char *m_slot;
-    QImage m_frame; // reused when dimensions match
+    FrameSink m_sink;
+    std::array<QImage, 4> m_pool; // producer + consumer in flight + slack
+    size_t m_poolNext = 0;
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
 };

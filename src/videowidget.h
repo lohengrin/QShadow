@@ -56,8 +56,13 @@ public:
 
     QVulkanWindowRenderer *createRenderer() override;
 
+    // Hands the newest decoded frame to the renderer. Safe to call from any
+    // thread (the decoder thread calls it directly, with no copy and no
+    // queued payload); older undelivered frames are replaced.
+    void submitFrame(const QImage &frame);
+
 public slots:
-    void setFrame(const QImage &frame);     // may be called from any thread
+    void setFrame(const QImage &frame);     // GUI-thread convenience wrapper
     void setPreserveAspect(bool on);
     void setShaderMode(ShaderMode mode);
     void setDownscale(int factor);
@@ -69,6 +74,7 @@ private:
     friend class VulkanRenderer;
 
     State m_state;
+    std::atomic<bool> m_updatePosted{false};
     mutable QMutex m_frameMutex;
     QImage m_pending;
 };

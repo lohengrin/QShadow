@@ -16,7 +16,7 @@ QVulkanWindowRenderer *VideoWidget::createRenderer()
     return new VulkanRenderer(this);
 }
 
-void VideoWidget::setFrame(const QImage &frame)
+void VideoWidget::submitFrame(const QImage &frame)
 {
     if (frame.isNull())
         return;
@@ -24,7 +24,22 @@ void VideoWidget::setFrame(const QImage &frame)
         QMutexLocker locker(&m_frameMutex);
         m_pending = frame;
     }
-    requestUpdate();
+    // requestUpdate() must run on the GUI thread; coalesce so at most one
+    // wake-up event is ever queued, however fast frames arrive.
+    if (!m_updatePosted.exchange(true)) {
+        QMetaObject::invokeMethod(
+            this,
+            [this] {
+                m_updatePosted.store(false);
+                requestUpdate();
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+void VideoWidget::setFrame(const QImage &frame)
+{
+    submitFrame(frame);
 }
 
 void VideoWidget::setPreserveAspect(bool on)

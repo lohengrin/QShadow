@@ -49,7 +49,9 @@ bool AudioSink::open(AudioRing *ring, QString *error)
     format.setChannelCount(2);
     format.setSampleFormat(QAudioFormat::Int16);
 
+    bool floatOutput = false;
     if (!device.isFormatSupported(format)) {
+        floatOutput = true;
         format.setSampleFormat(QAudioFormat::Float);
         if (!device.isFormatSupported(format)) {
             if (error)
@@ -58,7 +60,7 @@ bool AudioSink::open(AudioRing *ring, QString *error)
         }
     }
 
-    m_host = new HostAudioSink(ring);
+    m_host = new HostAudioSink(ring, floatOutput);
     if (!m_host->open(QIODevice::ReadOnly)) {
         delete m_host;
         m_host = nullptr;
@@ -68,7 +70,7 @@ bool AudioSink::open(AudioRing *ring, QString *error)
     }
 
     m_sink = new QAudioSink(device, format);
-    m_sink->setBufferSize(int(double(kOutputRate) * 2 * 2 * 0.04)); // ~40 ms
+    m_sink->setBufferSize(int(double(kOutputRate) * 2 * (floatOutput ? 4 : 2) * 0.04)); // ~40 ms
     m_sink->setVolume(m_volume);
     m_sink->start(m_host);
 

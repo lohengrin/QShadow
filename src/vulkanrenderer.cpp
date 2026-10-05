@@ -21,6 +21,9 @@ namespace {
 constexpr VkFormat kFrameFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kFsrFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 constexpr VkDeviceSize kUboSize = 256;
+// Stages that sample the per-renderer images shared by all in-flight frames.
+constexpr VkPipelineStageFlags kSharedImageReaders =
+    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
 constexpr VkImageUsageFlags kFrameUsage =
     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -494,12 +497,24 @@ void VulkanRenderer::initResources()
     sub.colorAttachmentCount = 1;
     sub.pColorAttachments = &colorRef;
 
+    // m_down is shared by every in-flight frame: wait for the previous frame's
+    // shader reads of it before this pass overwrites it (write-after-read).
+    VkSubpassDependency dep{};
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = 0;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
     VkRenderPassCreateInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     rp.attachmentCount = 1;
     rp.pAttachments = &att;
     rp.subpassCount = 1;
     rp.pSubpasses = &sub;
+    rp.dependencyCount = 1;
+    rp.pDependencies = &dep;
     m_d->vkCreateRenderPass(m_win->device(), &rp, nullptr, &m_offscreenPass);
 
     m_pipeDown = createGfxPipeline(":/shaders/passthrough.frag.spv", m_offscreenPass, false);
@@ -785,8 +800,10 @@ void VulkanRenderer::uploadFrame(const QImage &img, PerSwap *slot, VkCommandBuff
     std::memcpy(slot->stagingMapped, img.constBits(), std::size_t(bytes));
     flushRange(slot->stagingMem, bytes);
 
+    // m_frame is shared by every in-flight frame: the previous frame may still
+    // be sampling it, so the source stage must cover its shader reads.
     transition(cb, m_frame.image, m_frameLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-               VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+               VK_ACCESS_TRANSFER_WRITE_BIT, kSharedImageReaders | VK_PIPELINE_STAGE_TRANSFER_BIT,
                VK_PIPELINE_STAGE_TRANSFER_BIT);
 
     VkBufferImageCopy region{};
@@ -1092,7 +1109,7 @@ void VulkanRenderer::startNextFrame()
             if (fsrOut != srcSize) {
                 transition(cb, m_fsrA.image, VK_IMAGE_LAYOUT_UNDEFINED,
                            VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
-                           VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                           kSharedImageReaders, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
                 updateCompDescriptors(slot->compSets[0], slot->ubo[0], srcView, m_fsrA.view);
                 writeEasuConsts(slot, srcSize, fsrOut);
                 recordEasu(cb, slot->compSets[0], fsrOut);
@@ -1110,7 +1127,7 @@ void VulkanRenderer::startNextFrame()
             const QSize rcasOutSize = easuRan ? fsrOut : srcSize;
 
             transition(cb, rcasOut, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
-                       VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_ACCESS_SHADER_WRITE_BIT, kSharedImageReaders,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             updateCompDescriptors(slot->compSets[1], slot->ubo[1], rcasIn, rcasOutView);
             const float sharpness =
