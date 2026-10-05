@@ -51,6 +51,8 @@ No automated test framework. Smoke checks use system tools:
 - Video device present: `v4l2-ctl --list-devices` and `v4l2-ctl -d /dev/video0 --list-formats-ext`
 - Verify app negotiated format: `v4l2-ctl -d /dev/video0 --get-fmt-video`
 - Audio device: `arecord -l` (card must list a ShadowCast entry)
+- Headless stats: `QSHADOW_STATS=1 ./build/qshadow` prints the status bar lines
+  (rates, decode time, capture-to-render latency, audio buffer) to stderr.
 
 ## Conventions
 

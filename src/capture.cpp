@@ -22,6 +22,24 @@ int xioctl(int fd, unsigned long request, void *arg)
     return r;
 }
 
+// Host arrival time of a dequeued buffer. uvcvideo stamps buffers with
+// CLOCK_MONOTONIC (the same clock as steady_clock on Linux) at the first USB
+// packet of the frame, so this includes the transfer time. Anything implausible
+// falls back to "now".
+std::chrono::steady_clock::time_point frameStamp(const v4l2_buffer &buf)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if ((buf.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) != V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC
+        || (buf.timestamp.tv_sec == 0 && buf.timestamp.tv_usec == 0))
+        return now;
+    const auto ts = std::chrono::steady_clock::time_point(
+        std::chrono::seconds(buf.timestamp.tv_sec)
+        + std::chrono::microseconds(buf.timestamp.tv_usec));
+    if (ts > now || now - ts > std::chrono::seconds(1))
+        return now;
+    return ts;
+}
+
 } // namespace
 
 Capture::Capture(const QString &devicePath, const QSize &targetSize,
@@ -36,20 +54,29 @@ Capture::~Capture()
     join();
 }
 
+QDebug Capture::warn()
+{
+    if (m_quiet) {
+        m_discard.clear();
+        return QDebug(&m_discard);
+    }
+    return qWarning();
+}
+
 bool Capture::start(FrameQueue *out)
 {
     m_queue = out;
 
     m_fd = ::open(m_devicePath.toLocal8Bit().constData(), O_RDWR | O_NONBLOCK);
     if (m_fd < 0) {
-        qWarning() << "Capture: failed to open" << m_devicePath << strerror(errno);
+        warn() << "Capture: failed to open" << m_devicePath << strerror(errno);
         return false;
     }
 
     struct v4l2_capability cap;
     std::memset(&cap, 0, sizeof(cap));
     if (xioctl(m_fd, VIDIOC_QUERYCAP, &cap) < 0) {
-        qWarning() << "Capture: VIDIOC_QUERYCAP failed:" << strerror(errno);
+        warn() << "Capture: VIDIOC_QUERYCAP failed:" << strerror(errno);
         close(m_fd);
         m_fd = -1;
         return false;
@@ -65,13 +92,13 @@ bool Capture::start(FrameQueue *out)
     fmt.fmt.pix.height = uint32_t(m_targetSize.height());
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
     if (xioctl(m_fd, VIDIOC_S_FMT, &fmt) < 0) {
-        qWarning() << "Capture: VIDIOC_S_FMT failed:" << strerror(errno);
+        warn() << "Capture: VIDIOC_S_FMT failed:" << strerror(errno);
         close(m_fd);
         m_fd = -1;
         return false;
     }
     if (fmt.fmt.pix.pixelformat != device::toFourcc(m_format)) {
-        qWarning() << "Capture: driver refused the requested pixel format";
+        warn() << "Capture: driver refused the requested pixel format";
         close(m_fd);
         m_fd = -1;
         return false;
@@ -120,7 +147,7 @@ bool Capture::start(FrameQueue *out)
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
     if (xioctl(m_fd, VIDIOC_REQBUFS, &req) < 0) {
-        qWarning() << "Capture: VIDIOC_REQBUFS failed:" << strerror(errno);
+        warn() << "Capture: VIDIOC_REQBUFS failed:" << strerror(errno);
         close(m_fd);
         m_fd = -1;
         return false;
@@ -134,25 +161,25 @@ bool Capture::start(FrameQueue *out)
         buf.memory = V4L2_MEMORY_MMAP;
         buf.index = uint32_t(i);
         if (xioctl(m_fd, VIDIOC_QUERYBUF, &buf) < 0) {
-            qWarning() << "Capture: VIDIOC_QUERYBUF failed:" << strerror(errno);
+            warn() << "Capture: VIDIOC_QUERYBUF failed:" << strerror(errno);
             return false;
         }
         m_buffers[i].length = buf.length;
         m_buffers[i].start = mmap(nullptr, buf.length,
                                   PROT_READ | PROT_WRITE, MAP_SHARED, m_fd, buf.m.offset);
         if (m_buffers[i].start == MAP_FAILED) {
-            qWarning() << "Capture: mmap failed:" << strerror(errno);
+            warn() << "Capture: mmap failed:" << strerror(errno);
             m_buffers[i].start = nullptr;
             return false;
         }
         if (xioctl(m_fd, VIDIOC_QBUF, &buf) < 0) {
-            qWarning() << "Capture: VIDIOC_QBUF failed:" << strerror(errno);
+            warn() << "Capture: VIDIOC_QBUF failed:" << strerror(errno);
             return false;
         }
     }
 
     if (xioctl(m_fd, VIDIOC_STREAMON, &fmt.type) < 0) {
-        qWarning() << "Capture: VIDIOC_STREAMON failed:" << strerror(errno);
+        warn() << "Capture: VIDIOC_STREAMON failed:" << strerror(errno);
         return false;
     }
 
@@ -226,6 +253,7 @@ void Capture::run()
         if (used > 0 && complete && buf.index < uint32_t(m_bufferCount)) {
             Frame frame;
             const char *src = static_cast<const char *>(m_buffers[buf.index].start);
+            frame.stamp = frameStamp(buf);
             frame.format = m_format;
             frame.width = m_negotiated.width();
             frame.height = m_negotiated.height();

@@ -14,13 +14,24 @@ possible.
 - **Adapts to the input** — you pick the video mode that matches the source
   (e.g. 720p source → 1280×720), and the frame keeps its aspect ratio
   (letterboxed if the window doesn't match).
-- **Low latency pipeline** — MJPG capture → libjpeg-turbo decode on its own
-  thread → Vulkan blit. Frames are dropped rather than queued when things get
+- **MJPG or YUYV capture** — pick the *Format* in the toolbar. MJPG is the
+  dongle's compressed mode (up to 60 fps, but with JPEG compression artifacts);
+  YUYV is uncompressed and artifact-free, but USB 2.0 bandwidth limits it to
+  low resolutions (e.g. 720×480 @ 30 fps, 720×576 @ 25, 800×600 @ 20,
+  1280×720 @ 10) — ideal for retro / SD sources.
+- **Low latency pipeline** — MJPG capture → libjpeg-turbo decode (or YUYV →
+  RGB conversion) on its own thread → Vulkan blit. Frames are dropped rather than queued when things get
   busy, and the audio buffer is kept short.
 - **Audio** captured from the dongle at native 96 kHz and resampled to the
-  host output.
+  host output. The resampling ratio is nudged by at most ±0.5% to absorb clock
+  drift between the dongle and the sound card, so the buffer stays short
+  without clicks or dropouts.
+- **Hotplug** — start QShadow before plugging in the dongle, or unplug and
+  replug it while running; the capture reconnects automatically.
+- **Live stats** — the status bar shows capture/decode rates, decode time,
+  capture-to-render latency, audio buffer fill and drift correction.
 - **Remembers your settings** — window size, aspect-ratio toggle,
-  selected resolution, volume, shader and downscale are restored on the next
+  pixel format, selected resolution, volume, shader and downscale are restored on the next
   launch.
 - **GPU sharpening & CRT shaders** — pick a post-processing shader from the
   toolbar: nearest-neighbor *None*, *Bilinear smooth*, the pixel-art upscalers

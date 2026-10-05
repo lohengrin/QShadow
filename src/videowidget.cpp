@@ -16,13 +16,14 @@ QVulkanWindowRenderer *VideoWidget::createRenderer()
     return new VulkanRenderer(this);
 }
 
-void VideoWidget::submitFrame(const QImage &frame)
+void VideoWidget::submitFrame(const QImage &frame, std::chrono::steady_clock::time_point stamp)
 {
     if (frame.isNull())
         return;
     {
         QMutexLocker locker(&m_frameMutex);
         m_pending = frame;
+        m_pendingStamp = stamp;
     }
     // requestUpdate() must run on the GUI thread; coalesce so at most one
     // wake-up event is ever queued, however fast frames arrive.
@@ -130,11 +131,21 @@ QSize VideoWidget::pipelineOutputSize(const QSize &frame, int mode, int downscal
     return src;
 }
 
-bool VideoWidget::takePendingFrame(QImage *out)
+void VideoWidget::noteSubmitted(std::chrono::steady_clock::time_point stamp)
+{
+    const int us = int(std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - stamp).count());
+    const int prev = m_latencyUs.load(std::memory_order_relaxed);
+    // ~1 s smoothing at 60 fps.
+    m_latencyUs.store(prev == 0 ? us : prev + (us - prev) / 60, std::memory_order_relaxed);
+}
+
+bool VideoWidget::takePendingFrame(QImage *out, std::chrono::steady_clock::time_point *stamp)
 {
     QMutexLocker locker(&m_frameMutex);
     if (m_pending.isNull())
         return false;
+    *stamp = m_pendingStamp;
     *out = m_pending;
     m_pending = QImage();
     return true;

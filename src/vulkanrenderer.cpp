@@ -1051,7 +1051,9 @@ void VulkanRenderer::startNextFrame()
     VkCommandBuffer cb = m_win->currentCommandBuffer();
 
     QImage frame;
-    if (m_win->takePendingFrame(&frame))
+    std::chrono::steady_clock::time_point stamp;
+    const bool newFrame = m_win->takePendingFrame(&frame, &stamp);
+    if (newFrame)
         uploadFrame(frame, slot, cb);
 
     const QSize outSize = m_win->swapChainImageSize();
@@ -1250,5 +1252,7 @@ void VulkanRenderer::startNextFrame()
     }
 
     m_win->frameReady();
+    if (newFrame)
+        m_win->noteSubmitted(stamp);
 }
 
