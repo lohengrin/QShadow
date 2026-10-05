@@ -5,7 +5,10 @@
 // carries two pixels: (Y0, Cb, Y1, Cr). Chroma is shared by the pixel pair
 // (nearest), the same as the CPU path.
 //
-// The ShadowCast reports YUYV as BT.601 limited range (Y 16..235, CbCr 16..240).
+// The ShadowCast's YUYV is FULL range BT.601 (Y and CbCr spanning 0..255, the
+// same values its JPEGs carry), even though the driver reports "limited range":
+// verified against the MJPG stream of the same scene (mean colour within 0.3
+// levels; treating it as limited range came out visibly darker).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -24,12 +27,11 @@ void main()
     const vec4 t = texelFetch(uPacked, ivec2(p.x >> 1, p.y), 0);
     const float y = ((p.x & 1) == 0) ? t.r : t.b;
 
-    const float yy = 1.16438356 * (y - 16.0 / 255.0);
     const float cb = t.g - 128.0 / 255.0;
     const float cr = t.a - 128.0 / 255.0;
 
-    const vec3 rgb = vec3(yy + 1.59602679 * cr,
-                          yy - 0.39176229 * cb - 0.81296765 * cr,
-                          yy + 2.01723214 * cb);
+    const vec3 rgb = vec3(y + 1.402 * cr,
+                          y - 0.344136 * cb - 0.714136 * cr,
+                          y + 1.772 * cb);
     imageStore(uOut, p, vec4(clamp(rgb, 0.0, 1.0), 1.0));
 }

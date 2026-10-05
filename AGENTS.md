@@ -12,8 +12,8 @@ host with minimal latency.
   colour conversion) that a compute shader (`shaders/yuv2rgb.comp`) converts
   to RGBA on the GPU (falls back to CPU RGBA decode for non-YCbCr JPEGs or if
   the GPU path is unavailable; `QSHADOW_CPU_CONVERT=1` forces the fallback), or
-  uncompressed YUYV (BT.601
-  limited range; the capture buffer is passed to the GPU untouched and converted
+  uncompressed YUYV (full-range BT.601, the same values as the JPEGs, even
+  though the driver claims limited range; the capture buffer is passed to the GPU untouched and converted
   by `shaders/yuyv2rgb.comp`, or on the CPU as fallback; artifact-free but
   USB 2.0 limits it to ≤720x480@30 / 720x576@25 / 800x600@20 / 1280x720@10)
   → Vulkan (QVulkanWindow) display,

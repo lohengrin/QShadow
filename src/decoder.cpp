@@ -222,8 +222,11 @@ void Decoder::join()
         m_thread.join();
 }
 
-// YUYV (4:2:2, BT.601 limited range, as reported by the driver) -> RGBA8888.
-// Integer fixed-point (8 fractional bits); chroma is shared by pixel pairs.
+// YUYV (4:2:2) -> RGBA8888. The ShadowCast's YUYV is FULL range BT.601 (the same
+// values as its JPEGs' YCbCr, Y spanning 0..255), although the driver reports it
+// as limited range: measured against the MJPG stream of the same scene, the
+// limited-range assumption made the picture visibly darker. Integer
+// fixed-point (8 fractional bits); chroma is shared by pixel pairs.
 void Decoder::convertYuyv(const Frame &frame, QImage &dst)
 {
     const int w = frame.width;
@@ -236,11 +239,11 @@ void Decoder::convertYuyv(const Frame &frame, QImage &dst)
         for (int x = 0; x < w; x += 2, s += 4) {
             const int u = s[1] - 128;
             const int v = s[3] - 128;
-            const int rc = 409 * v + 128;
-            const int gc = -100 * u - 208 * v + 128;
-            const int bc = 516 * u + 128;
+            const int rc = 359 * v + 128;            // 1.402
+            const int gc = -88 * u - 183 * v + 128;  // -0.344136, -0.714136
+            const int bc = 454 * u + 128;            // 1.772
             for (int k = 0; k < 2 && x + k < w; ++k) { // w may be odd: no pixel past the row
-                const int c = 298 * (s[k * 2] - 16);
+                const int c = int(s[k * 2]) << 8;
                 // Memory order R,G,B,A == RGBA8888 on little-endian.
                 d[x + k] = clamp8((c + rc) >> 8) | (clamp8((c + gc) >> 8) << 8)
                            | (clamp8((c + bc) >> 8) << 16) | 0xff000000u;

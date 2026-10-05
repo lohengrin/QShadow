@@ -305,11 +305,12 @@ private slots:
     void yuyvConvertsToRgbaOnTheCpu()
     {
         Harness h(false);
-        // 4 pixels: black, white, red, mid-grey (BT.601 limited range).
-        const uint8_t px[] = {16, 128, 16, 128,   // black, black
-                              235, 128, 235, 128, // white, white
-                              81, 90, 81, 240,    // red (Cb=90, Cr=240)
-                              126, 128, 126, 128};
+        // Pixel pairs: black, white, red, mid-grey. Full-range BT.601 (what the
+        // ShadowCast really sends): Y spans 0..255, neutral chroma is 128.
+        const uint8_t px[] = {0, 128, 0, 128,       // black, black
+                              255, 128, 255, 128,   // white, white
+                              76, 85, 76, 255,      // red (Cb=85, Cr=255)
+                              128, 128, 128, 128};  // grey
         QVERIFY(h.feed(yuyvFrame(8, 1, 16, QByteArray(reinterpret_cast<const char *>(px), 16))));
         const VideoFramePtr f = h.last();
         QVERIFY(f);
@@ -317,10 +318,10 @@ private slots:
         QCOMPARE(f->size(), QSize(8, 1));
         QVERIFY(qRed(f->rgba.pixel(0, 0)) <= 1 && qGreen(f->rgba.pixel(0, 0)) <= 1);
         QVERIFY(qRed(f->rgba.pixel(2, 0)) >= 254 && qBlue(f->rgba.pixel(3, 0)) >= 254);
-        QVERIFY(qRed(f->rgba.pixel(4, 0)) > 240);
-        QVERIFY(qGreen(f->rgba.pixel(4, 0)) < 16 && qBlue(f->rgba.pixel(4, 0)) < 16);
+        QVERIFY(qRed(f->rgba.pixel(4, 0)) > 250);
+        QVERIFY(qGreen(f->rgba.pixel(4, 0)) < 8 && qBlue(f->rgba.pixel(4, 0)) < 8);
         const int grey = qRed(f->rgba.pixel(6, 0));
-        QVERIFY(grey > 120 && grey < 135);
+        QVERIFY(grey >= 127 && grey <= 129);
         QCOMPARE(qAlpha(f->rgba.pixel(0, 0)), 255);
     }
 
