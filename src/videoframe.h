@@ -25,7 +25,7 @@ struct VideoFrame {
     Kind kind = Kind::Rgba;
     QImage rgba;     // Kind::Rgba (RGBA8888, tightly packed)
     Plane planes[3]; // Kind::Yuv: Y, Cb, Cr (full-range BT.601 / JFIF)
-                     // Kind::Yuyv: planes[0] only, packed 4:2:2, limited-range BT.601;
+                     // Kind::Yuyv: planes[0] only, packed 4:2:2, full-range BT.601 (like the JPEGs);
                      //   `data` is the capture buffer itself (shared, not copied)
 
     // Luma / pixel size of the frame.
