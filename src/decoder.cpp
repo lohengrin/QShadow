@@ -160,7 +160,7 @@ void Decoder::run()
             m_stats->decodeNs.fetch_add(uint64_t(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
             if (m_sink)
-                m_sink(img);
+                m_sink(img, frame.stamp);
             continue;
         }
 
@@ -178,7 +178,7 @@ void Decoder::run()
                 m_stats->decodeNs.fetch_add(uint64_t(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
                 if (m_sink)
-                    m_sink(img);
+                    m_sink(img, frame.stamp);
             }
         }
         if (!ok)

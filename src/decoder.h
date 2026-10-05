@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <thread>
 
@@ -17,7 +18,7 @@
 // so there is no per-frame allocation or copy.
 class Decoder {
 public:
-    using FrameSink = std::function<void(const QImage &)>;
+    using FrameSink = std::function<void(const QImage &, std::chrono::steady_clock::time_point)>;
     Decoder(FrameQueue *queue, Stats *stats, FrameSink sink);
     ~Decoder();
 

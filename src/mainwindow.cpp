@@ -9,7 +9,6 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -28,13 +27,19 @@ MainWindow::MainWindow(QVulkanInstance *vulkan, QWidget *parent)
     , m_vulkanInstance(vulkan)
 {
     buildUi();
-    findDevices();
     loadSettings();
+    connectDevice();
     startPipeline();
 
     m_statusTimer.setInterval(500);
     connect(&m_statusTimer, &QTimer::timeout, this, &MainWindow::updateStatus);
     m_statusTimer.start();
+
+    // Hotplug: notice an unplugged/dead capture, or a dongle that appears later,
+    // and (re)start the pipeline.
+    m_deviceTimer.setInterval(1000);
+    connect(&m_deviceTimer, &QTimer::timeout, this, &MainWindow::checkDevice);
+    m_deviceTimer.start();
 }
 
 MainWindow::~MainWindow()
@@ -148,6 +153,11 @@ void MainWindow::buildUi()
 
     m_status = new QLabel(this);
     m_statsLabel = new QLabel(this);
+    m_statsLabel->setToolTip(QStringLiteral(
+        "latency: from the first USB packet of a frame to the frame being "
+        "submitted for display (includes the USB transfer time of the frame).\n"
+        "It excludes the dongle's own capture/encode delay and the display's "
+        "scanout."));
     statusBar()->addWidget(m_status, 1);
     statusBar()->addPermanentWidget(m_statsLabel);
 
@@ -214,31 +224,50 @@ void MainWindow::fitToPipeline()
     m_video->requestUpdate();
 }
 
-void MainWindow::findDevices()
+bool MainWindow::connectDevice()
 {
-    m_devicePath = device::findShadowCastDevice();
-    if (m_devicePath.isEmpty()) {
-        showDeviceError(QStringLiteral("No ShadowCast capture dongle found (298f:1996)."));
-        return;
-    }
-
-    for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
-        const QList<QSize> sizes = device::enumerateSizes(m_devicePath, format);
-        if (sizes.isEmpty())
-            continue;
-        m_sizes.insert(int(format), sizes);
-        m_formatCombo->addItem(format == device::PixelFormat::Mjpg
-                                   ? QStringLiteral("MJPG") : QStringLiteral("YUYV"),
-                               int(format));
-    }
-    if (m_sizes.isEmpty()) {
-        showDeviceError(QStringLiteral("ShadowCast offers no MJPG or YUYV capture sizes."));
+    const QString path = device::findShadowCastDevice();
+    if (path.isEmpty()) {
         m_devicePath.clear();
-        return;
+        m_sizes.clear();
+        return false;
     }
-    populateResolutions(QSize());
 
+    QHash<int, QList<QSize>> sizes;
+    for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
+        const QList<QSize> list = device::enumerateSizes(path, format);
+        if (!list.isEmpty())
+            sizes.insert(int(format), list);
+    }
+    if (sizes.isEmpty()) {
+        m_devicePath.clear();
+        m_sizes.clear();
+        return false;
+    }
+
+    // Only touch the toolbar when something changed, so an open drop-down is
+    // not yanked away by the periodic retry.
+    if (path != m_devicePath || sizes != m_sizes || m_formatCombo->count() == 0) {
+        m_devicePath = path;
+        m_sizes = sizes;
+        {
+            const QSignalBlocker blocker(m_formatCombo);
+            m_formatCombo->clear();
+            for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
+                if (m_sizes.contains(int(format)))
+                    m_formatCombo->addItem(format == device::PixelFormat::Mjpg
+                                               ? QStringLiteral("MJPG")
+                                               : QStringLiteral("YUYV"),
+                                           int(format));
+            }
+            const int idx = m_formatCombo->findData(m_prefFormat);
+            if (idx >= 0)
+                m_formatCombo->setCurrentIndex(idx);
+        }
+        populateResolutions(m_prefSize);
+    }
     m_audioCard = findShadowCastAudioCard();
+    return true;
 }
 
 void MainWindow::populateResolutions(const QSize &preferred)
@@ -289,14 +318,10 @@ void MainWindow::loadSettings()
     // also hand it to a not-yet-open sink so it takes effect on start.
     m_audioSink.setVolume(qreal(m_volumeSlider->value()) / 100.0);
 
-    if (settings.contains(QStringLiteral("pixelFormat"))) {
-        const int idx = m_formatCombo->findData(settings.value(QStringLiteral("pixelFormat")).toInt());
-        if (idx >= 0)
-            m_formatCombo->setCurrentIndex(idx);
-    }
-    const QSize saved(settings.value(QStringLiteral("videoWidth")).toInt(),
-                      settings.value(QStringLiteral("videoHeight")).toInt());
-    populateResolutions(saved);
+    m_prefFormat = settings.value(QStringLiteral("pixelFormat"),
+                                  int(device::PixelFormat::Mjpg)).toInt();
+    m_prefSize = QSize(settings.value(QStringLiteral("videoWidth")).toInt(),
+                       settings.value(QStringLiteral("videoHeight")).toInt());
     m_video->setPreserveAspect(m_aspectCheck->isChecked());
 }
 
@@ -310,49 +335,57 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("shader"), m_shaderCombo->currentData().toInt());
     settings.setValue(QStringLiteral("downscale"), m_downscaleCombo->currentData().toInt());
 
-    const QSize res = m_resCombo->currentData().toSize();
-    settings.setValue(QStringLiteral("pixelFormat"), m_formatCombo->currentData().toInt());
-    if (res.isValid()) {
-        settings.setValue(QStringLiteral("videoWidth"), res.width());
-        settings.setValue(QStringLiteral("videoHeight"), res.height());
+    settings.setValue(QStringLiteral("pixelFormat"), m_prefFormat);
+    if (m_prefSize.isValid()) {
+        settings.setValue(QStringLiteral("videoWidth"), m_prefSize.width());
+        settings.setValue(QStringLiteral("videoHeight"), m_prefSize.height());
     }
     settings.sync();
 }
 
 void MainWindow::startPipeline()
 {
+    stopPipeline();
+    // Audio only follows a successfully started capture: when the device is busy
+    // or just vanished, retrying every second must not churn the audio sink.
+    if (startVideo())
+        startAudio();
+}
+
+void MainWindow::stopPipeline()
+{
+    stopVideo();
+    stopAudio();
+}
+
+bool MainWindow::startVideo()
+{
     if (m_devicePath.isEmpty())
-        return;
+        return false;
 
     const QSize target = m_resCombo->currentData().toSize();
     if (target.isEmpty())
-        return;
+        return false;
 
-    stopPipeline();
-    m_ring.clear();
-
+    m_queue.clear();
     const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
     m_capture = new Capture(m_devicePath, target, format, &m_stats);
     VideoWidget *video = m_video;
     m_decoder = new Decoder(&m_queue, &m_stats,
-                            [video](const QImage &img) { video->submitFrame(img); });
-    m_audio = new AudioCapture(&m_ring, &m_stats);
+                            [video](const QImage &img, std::chrono::steady_clock::time_point stamp) {
+                                video->submitFrame(img, stamp);
+                            });
 
-    QString audioErr;
-    if (!m_audioSink.open(&m_ring, &audioErr))
-        qWarning() << "Audio output:" << audioErr;
-
+    m_capture->setQuiet(m_captureFailing);
     const bool capOk = m_capture->start(&m_queue);
     m_decoder->start();
-
-    if (!m_audio->start(m_audioCard))
-        qWarning() << "Audio capture:" << m_audio->errorMessage();
-
-    if (!capOk)
-        qWarning() << "Capture failed to start for" << target;
+    if (!capOk && !m_captureFailing)
+        qWarning() << "Capture failed to start for" << target << "- retrying every second";
+    m_captureFailing = !capOk;
+    return capOk;
 }
 
-void MainWindow::stopPipeline()
+void MainWindow::stopVideo()
 {
     if (m_capture) {
         m_capture->stop();
@@ -366,6 +399,22 @@ void MainWindow::stopPipeline()
         delete m_decoder;
         m_decoder = nullptr;
     }
+}
+
+void MainWindow::startAudio()
+{
+    m_ring.clear();
+    m_audio = new AudioCapture(&m_ring, &m_stats);
+
+    QString audioErr;
+    if (!m_audioSink.open(&m_ring, &audioErr))
+        qWarning() << "Audio output:" << audioErr;
+    if (!m_audio->start(m_audioCard))
+        qWarning() << "Audio capture:" << m_audio->errorMessage();
+}
+
+void MainWindow::stopAudio()
+{
     if (m_audio) {
         m_audio->stop();
         m_audio->join();
@@ -375,70 +424,100 @@ void MainWindow::stopPipeline()
     m_audioSink.close();
 }
 
+void MainWindow::checkDevice()
+{
+    if (m_capture && m_capture->isRunning())
+        return;
+
+    // Never started, failed, or the capture thread died (unplug / stream
+    // error): rebuild everything, since the audio card may have gone too.
+    stopPipeline();
+    if (connectDevice())
+        startPipeline();
+}
+
 void MainWindow::onFormatChanged(int index)
 {
     if (index < 0)
         return;
+    m_prefFormat = m_formatCombo->currentData().toInt();
     // Keep the current size if the new format offers it, else its largest.
     populateResolutions(m_resCombo->currentData().toSize());
-    startPipeline();
+    m_prefSize = m_resCombo->currentData().toSize();
+    stopVideo();
+    startVideo();
 }
 
 void MainWindow::onResolutionChanged(int index)
 {
     if (index < 0)
         return;
-    startPipeline();
+    m_prefSize = m_resCombo->currentData().toSize();
+    // Only the video needs to restart; the audio keeps playing.
+    stopVideo();
+    startVideo();
 }
 
 void MainWindow::updateStatus()
 {
     if (m_devicePath.isEmpty()) {
-        m_status->setText(QStringLiteral("No device"));
+        m_status->setText(QStringLiteral("Waiting for the ShadowCast dongle (298f:1996)…"));
+        m_statsLabel->clear();
+        return;
+    }
+    if (!m_capture || !m_capture->isRunning()) {
+        m_status->setText(QStringLiteral("Capture stopped — reconnecting…"));
+        m_statsLabel->clear();
         return;
     }
 
+    // Rates and decode time are over the last status interval, so a spike or a
+    // recovery shows up immediately instead of being averaged away.
     const uint64_t captured = m_stats.captured.load();
     const uint64_t decoded = m_stats.decoded.load();
+    const uint64_t decodeNs = m_stats.decodeNs.load();
     const uint64_t drops = m_queue.drops() + m_stats.droppedDecode.load();
-    const double fpsCap = (captured - m_lastCaptured) / 0.5;
-    const double fpsDec = (decoded - m_lastDecoded) / 0.5;
+    const double interval = m_statusTimer.interval() / 1000.0;
+    const double fpsCap = double(captured - m_lastCaptured) / interval;
+    const double fpsDec = double(decoded - m_lastDecoded) / interval;
+    const uint64_t decodedNow = decoded - m_lastDecoded;
+    const double decodeMs =
+        decodedNow ? double(decodeNs - m_lastDecodeNs) / 1e6 / double(decodedNow) : 0.0;
+    const bool noFrames = captured == m_lastCaptured;
     m_lastCaptured = captured;
     m_lastDecoded = decoded;
+    m_lastDecodeNs = decodeNs;
 
     const int w = m_stats.frameW.load();
     const int h = m_stats.frameH.load();
-    const uint64_t decodeNs = m_stats.decodeNs.load();
-    const double decodeMs = decoded ? double(decodeNs) / 1e6 / decoded : 0.0;
 
     QString resText;
-    if (m_capture) {
-        const QSize neg = m_capture->negotiatedSize();
-        if (neg.isValid())
-            resText = QStringLiteral("%1x%2").arg(neg.width()).arg(neg.height());
-    }
+    const QSize neg = m_capture->negotiatedSize();
+    if (neg.isValid())
+        resText = QStringLiteral("%1x%2").arg(neg.width()).arg(neg.height());
 
     m_status->setText(QStringLiteral("Device: %1  |  negotiated %2  |  frame %3x%4  |  "
-                                     "audio: %5")
+                                     "audio: %5%6")
                           .arg(m_devicePath, resText)
                           .arg(w).arg(h)
                           .arg(m_audioSink.active() ? QStringLiteral("active")
-                                                      : QStringLiteral("off")));
+                                                      : QStringLiteral("off"))
+                          .arg(noFrames ? QStringLiteral("  |  NO FRAMES RECEIVED")
+                                        : QString()));
 
     m_statsLabel->setText(QStringLiteral("cap %1 fps  dec %2 fps  dropped %3  decode %4 ms  "
-                                         "audio buf %5 ms (%6 ppm)  underruns %7")
+                                         "latency %5 ms  audio buf %6 ms (%7 ppm)  underruns %8")
                               .arg(fpsCap, 0, 'f', 1)
                               .arg(fpsDec, 0, 'f', 1)
                               .arg(drops)
                               .arg(decodeMs, 0, 'f', 1)
+                              .arg(m_video->latencyUs() / 1000.0, 0, 'f', 1)
                               .arg(double(m_ring.depthBytes()) / double(AudioRing::kBytesPerMs),
                                    0, 'f', 0)
                               .arg(m_audio ? m_audio->driftPpm() : 0)
                               .arg(m_ring.underruns()));
-}
 
-void MainWindow::showDeviceError(const QString &message)
-{
-    QMessageBox::warning(this, QStringLiteral("QShadow"), message);
-    m_status->setText(message);
+    static const bool printStats = !qEnvironmentVariableIsEmpty("QSHADOW_STATS");
+    if (printStats)
+        qInfo().noquote() << m_status->text() << "||" << m_statsLabel->text();
 }
