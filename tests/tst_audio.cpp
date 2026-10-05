@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "audiodrift.h"
+#include "audiopipeline.h"
 
 #include <QtTest>
 
@@ -8,6 +9,8 @@
 #include <vector>
 
 namespace {
+
+constexpr double kPi = 3.14159265358979323846; // M_PI is not guaranteed (MSVC)
 
 QByteArray stereoChunk(const std::vector<int16_t> &samples)
 {
@@ -206,14 +209,81 @@ private slots:
         DriftResampler r;
         std::vector<float> in, out;
         for (int i = 0; i < 4800; ++i)
-            in.push_back(float(std::sin(2.0 * M_PI * 1000.0 * i / 48000.0)));
+            in.push_back(float(std::sin(2.0 * kPi * 1000.0 * i / 48000.0)));
         r.process(in.data(), in.size(), 1.004, &out);
         // Linear interpolation of a 1 kHz tone at 48 kHz: no sample may step by
         // more than the tone's own maximum slope.
         float maxStep = 0.0f;
         for (size_t i = 1; i < out.size(); ++i)
             maxStep = std::max(maxStep, std::abs(out[i] - out[i - 1]));
-        QVERIFY(maxStep < 2.0 * float(M_PI) * 1000.0f / 48000.0f * 1.05f);
+        QVERIFY(maxStep < 2.0f * float(kPi) * 1000.0f / 48000.0f * 1.05f);
+    }
+
+    // ---- AudioPipeline (the platform-independent half of audio capture) ----
+    void pipelineDecimatesBy2AndDuplicatesToStereo()
+    {
+        AudioRing ring;
+        AudioPipeline pipe(&ring, 96000, 1);
+        std::vector<int16_t> in(4000, 1000); // 96 kHz mono, constant
+        pipe.process(in.data(), in.size());
+        const size_t frames = ring.depthBytes() / 4;
+        QVERIFY2(frames >= 1990 && frames <= 2030, qPrintable(QString::number(frames)));
+        std::vector<int16_t> out(frames * 2);
+        QCOMPARE(ring.pull(reinterpret_cast<char *>(out.data()), qint64(out.size() * 2)),
+                 qint64(out.size() * 2));
+        for (size_t i = 2; i < frames; ++i) { // [0] is the resampler's priming sample
+            QCOMPARE(out[2 * i], int16_t(1000));
+            QCOMPARE(out[2 * i + 1], int16_t(1000)); // L == R
+        }
+    }
+
+    void pipelineAtNativeRateKeepsEverySample()
+    {
+        AudioRing ring;
+        AudioPipeline pipe(&ring, 48000, 1);
+        std::vector<int16_t> in(2000, 500);
+        pipe.process(in.data(), in.size());
+        const size_t frames = ring.depthBytes() / 4;
+        QVERIFY2(frames >= 1990 && frames <= 2030, qPrintable(QString::number(frames)));
+    }
+
+    void pipelineDownmixesChannelsToMono()
+    {
+        AudioRing ring;
+        AudioPipeline pipe(&ring, 48000, 2);
+        std::vector<int16_t> in;
+        for (int i = 0; i < 1000; ++i) {
+            in.push_back(1000); // left
+            in.push_back(3000); // right
+        }
+        pipe.process(in.data(), 1000);
+        std::vector<int16_t> out(ring.depthBytes() / 2);
+        ring.pull(reinterpret_cast<char *>(out.data()), qint64(out.size() * 2));
+        QVERIFY(out.size() > 100);
+        QCOMPARE(out[out.size() - 2], int16_t(2000)); // (1000 + 3000) / 2
+    }
+
+    void pipelineCarriesOddSamplesAcrossCalls()
+    {
+        AudioRing bulk, pieces;
+        AudioPipeline a(&bulk, 96000, 1), b(&pieces, 96000, 1);
+        std::vector<int16_t> in(2000, 700);
+        a.process(in.data(), in.size());
+        for (size_t i = 0; i < in.size(); i += 7) // awkward chunk size
+            b.process(in.data() + i, std::min<size_t>(7, in.size() - i));
+        const auto diff = qint64(bulk.depthBytes()) - qint64(pieces.depthBytes());
+        QVERIFY2(qAbs(diff) <= 4 * 4, qPrintable(QString::number(diff)));
+    }
+
+    void pipelineReportsDriftWhenTheRingRunsFull()
+    {
+        AudioRing ring;
+        ring.push(QByteArray(20 * int(AudioRing::kBytesPerMs), 0)); // 20 ms: above the target
+        AudioPipeline pipe(&ring, 96000, 1);
+        std::vector<int16_t> in(480, 0);
+        for (int i = 0; i < 400; ++i)
+            pipe.process(in.data(), in.size());
+        QVERIFY(pipe.driftPpm() > 0); // draining a ring that is too full
     }
 };
 

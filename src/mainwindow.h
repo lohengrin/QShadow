@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "capture.h"
 #include "decoder.h"
+#include "platform/platform.h"
 #include "videowidget.h"
 
 #include <QComboBox>
@@ -11,6 +12,8 @@
 #include <QMainWindow>
 #include <QSize>
 #include <QTimer>
+
+#include <memory>
 
 class QCheckBox;
 class QCloseEvent;
@@ -59,7 +62,7 @@ private:
     QSize m_prefSize;
     bool m_captureFailing = false; // log a persistent start failure only once
     QHash<int, QList<device::Mode>> m_sizes; // keyed by device::PixelFormat
-    int m_audioCard = -1;
+    QString m_audioId; // backend-defined identifier of the dongle's audio interface
 
     QVulkanInstance *m_vulkanInstance = nullptr;
     VideoWidget *m_video = nullptr;
@@ -79,9 +82,9 @@ private:
     FrameQueue m_queue{2};
     AudioRing m_ring;
 
-    Capture *m_capture = nullptr;
+    std::unique_ptr<CaptureSource> m_capture;
     Decoder *m_decoder = nullptr;
-    AudioCapture *m_audio = nullptr;
+    std::unique_ptr<AudioInput> m_audio;
     AudioSink m_audioSink;
 
     QTimer m_statusTimer;

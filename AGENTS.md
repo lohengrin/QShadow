@@ -52,8 +52,8 @@ Run:
 ## Testing
 
 Unit tests (Qt Test, run by ctest; no dongle, GPU or display needed) cover the
-audio ring / drift control, the decoder (MJPG planar vs RGBA, YUYV, corrupt
-frames, frame-pool recycling), the frame queue and the sizing helpers:
+audio ring / pipeline / drift control, the decoder (MJPG planar vs RGBA, YUYV, corrupt
+frames, frame-pool recycling), the frame queue / buffer pool and the sizing helpers:
 
 ```
 cmake --build build -j && ctest --test-dir build --output-on-failure
@@ -69,14 +69,45 @@ use system tools:
 - Headless stats: `QSHADOW_STATS=1 ./build/qshadow` prints the status bar lines
   (rates, decode time, capture-to-render latency, audio buffer) to stderr.
 
+## Architecture
+
+Capture and audio input are the only OS-specific parts. They sit behind the
+interfaces in `src/platform/platform.h` (`CaptureSource`, `AudioInput`, and the
+`platform::findDevice / enumerateModes / createCapture / createAudioInput`
+functions); everything else (decoder, YUV shaders, Vulkan renderer, UI, audio
+pipeline and drift control) is portable Qt/Vulkan code in `src/`.
+
+```
+src/platform/platform.h        interfaces + factory functions (the seam)
+src/platform/linux/            V4L2 video, ALSA audio, sysfs USB lookup
+src/audiopipeline.*            portable audio conditioning: downmix, decimate to
+                               48 kHz, drift-compensated resample -> AudioRing
+src/capture.h                  Frame, FrameQueue, BufferPool (portable)
+```
+
+To add a platform (e.g. Windows, Media Foundation): create `src/platform/<os>/`,
+implement the five `platform::` functions and the two interfaces, and select it
+in `CMakeLists.txt` next to the Linux block. Rules for a backend:
+
+- Identify the dongle by USB vendor/product ID (`device::kUsbVendorId/ProductId`),
+  never by a hard-coded node or name; device ids are opaque strings.
+- `CaptureSource` pushes `Frame`s (MJPG JPEGs or packed YUYV) into the
+  `FrameQueue` from its own thread and never blocks on the consumer; use
+  `BufferPool` for frame storage and set `Frame::stamp` to the capture time.
+- `AudioInput` feeds raw S16 frames (any 48000*k Hz rate, any channel count) to
+  an `AudioPipeline`; it does not resample or buffer anything itself.
+- Keep OS headers (`<linux/...>`, `<alsa/...>`, `<windows.h>`) inside the
+  backend directory.
+
 ## Conventions
 
 - C++20. Qt Widgets + `QVulkanWindow`/`QVulkanWindowRenderer` for rendering.
-- Native V4L2 (open/ioctl/mmap) and ALSA (`snd_pcm_*`), not GStreamer.
+- Native V4L2 (open/ioctl/mmap) and ALSA (`snd_pcm_*`) on Linux, not GStreamer;
+  other platforms get their own native backend (see Architecture).
 - Latency budget is critical: bounded queues, frame-drop on backpressure,
   non-blocking capture thread, no unbounded buffering in the audio path.
 - No `std::format`; use `QString/QByteArray` and Qt idioms.
-- Match on the USB vendor/product IDs from uvcvideo/sysfs, never hardcode
+- Match on the USB vendor/product IDs (sysfs on Linux), never hardcode
   `/dev/videoN`.
 - Keep decode in a worker thread; the GUI thread only blits the latest frame.
 - Vulkan resources are owned by `VulkanRenderer` and created/destroyed on the
