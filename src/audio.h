@@ -8,6 +8,8 @@
 #include <QString>
 
 #include <atomic>
+#include <cstring>
+#include <cstdint>
 #include <deque>
 #include <thread>
 
@@ -81,22 +83,47 @@ private:
 // the sink is paced by real data. Logger counts only true starvation.
 class HostAudioSink : public QIODevice {
 public:
-    explicit HostAudioSink(AudioRing *ring) : m_ring(ring) {}
+    // floatOutput: the host sink only accepts 32-bit float PCM, so the ring's
+    // S16 samples are converted on the way out.
+    explicit HostAudioSink(AudioRing *ring, bool floatOutput = false)
+        : m_ring(ring), m_float(floatOutput)
+    {
+    }
 
     qint64 readData(char *data, qint64 maxlen) override
     {
-        return m_ring ? m_ring->pull(data, maxlen) : qint64(0);
+        if (!m_ring)
+            return 0;
+        if (!m_float)
+            return m_ring->pull(data, maxlen);
+
+        const qint64 samples = maxlen / qint64(sizeof(float));
+        if (samples <= 0)
+            return 0;
+        m_scratch.resize(int(samples * qint64(sizeof(int16_t))));
+        const qint64 got = m_ring->pull(m_scratch.data(), m_scratch.size());
+        const qint64 n = got / qint64(sizeof(int16_t));
+        const auto *in = reinterpret_cast<const int16_t *>(m_scratch.constData());
+        auto *out = reinterpret_cast<float *>(data);
+        for (qint64 i = 0; i < n; ++i)
+            out[i] = float(in[i]) * (1.0f / 32768.0f);
+        return n * qint64(sizeof(float));
     }
 
     qint64 writeData(const char *, qint64) override { return -1; }
 
     qint64 bytesAvailable() const override
     {
-        return m_ring ? qint64(m_ring->depthBytes()) : qint64(0);
+        if (!m_ring)
+            return 0;
+        const qint64 bytes = qint64(m_ring->depthBytes());
+        return m_float ? bytes * 2 : bytes;
     }
 
 private:
     AudioRing *m_ring;
+    bool m_float;
+    QByteArray m_scratch;
 };
 
 // Finds the ALSA card index of the ShadowCast audio device (-1 if absent).

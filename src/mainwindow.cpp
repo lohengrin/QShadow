@@ -333,7 +333,9 @@ void MainWindow::startPipeline()
 
     const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
     m_capture = new Capture(m_devicePath, target, format, &m_stats);
-    m_decoder = new Decoder(&m_queue, &m_stats, m_video, "setFrame");
+    VideoWidget *video = m_video;
+    m_decoder = new Decoder(&m_queue, &m_stats,
+                            [video](const QImage &img) { video->submitFrame(img); });
     m_audio = new AudioCapture(&m_ring, &m_stats);
 
     QString audioErr;
