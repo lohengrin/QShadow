@@ -426,11 +426,14 @@ void MainWindow::updateStatus()
                                                       : QStringLiteral("off")));
 
     m_statsLabel->setText(QStringLiteral("cap %1 fps  dec %2 fps  dropped %3  decode %4 ms  "
-                                         "aud/underrun %5")
+                                         "audio buf %5 ms (%6 ppm)  underruns %7")
                               .arg(fpsCap, 0, 'f', 1)
                               .arg(fpsDec, 0, 'f', 1)
                               .arg(drops)
                               .arg(decodeMs, 0, 'f', 1)
+                              .arg(double(m_ring.depthBytes()) / double(AudioRing::kBytesPerMs),
+                                   0, 'f', 0)
+                              .arg(m_audio ? m_audio->driftPpm() : 0)
                               .arg(m_ring.underruns()));
 }
 

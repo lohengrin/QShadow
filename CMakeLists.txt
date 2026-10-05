@@ -108,7 +108,7 @@ qt_add_executable(qshadow
   src/videowidget.h src/videowidget.cpp
   src/vulkanrenderer.h src/vulkanrenderer.cpp
   src/fsrconsts.h
-  src/audio.h src/audio.cpp
+  src/audio.h src/audio.cpp src/audiodrift.h
   src/mainwindow.h src/mainwindow.cpp
 )
 

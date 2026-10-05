@@ -14,7 +14,9 @@ host with minimal latency.
   → Vulkan (QVulkanWindow) display,
   auto-adapts to the source's active resolution/rate and preserves aspect ratio.
 - Audio: ALSA capture from the dongle (S16_LE mono 96 kHz) → resampled to
-  stereo 48 kHz float → host default output via Qt Multimedia `QAudioSink`.
+  stereo 48 kHz float → host default output via Qt Multimedia `QAudioSink`. A PI controller
+  (`src/audiodrift.h`) nudges the resampling ratio (max ±0.5%) to hold the
+  ring fill near a small target, absorbing dongle/host clock drift.
 - Settings (window geometry, aspect toggle, pixel format, selected resolution, shader,
   downscale, volume) persist in `QSettings` and are restored on the next launch.
 - Platform: Linux, Wayland only. Native ALSA/V4L2, no GStreamer.

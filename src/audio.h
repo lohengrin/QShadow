@@ -17,16 +17,21 @@ class QAudioSink;
 
 // Bounded ring of S16 stereo 48 kHz chunks feeding the host audio device.
 // Pulled by Qt's audio thread; filled by the ALSA capture thread. Drops the
-// oldest chunk when full so capture never blocks.
+// oldest audio when over the cap so capture never blocks. The cap is only a
+// safety valve: AudioCapture's drift control keeps the fill near a small target.
 class AudioRing {
 public:
+    static constexpr size_t kBytesPerMs = 48 * 2 * 2; // 48 kHz stereo S16
+    static constexpr size_t kMaxBytes = 60 * kBytesPerMs;
+
     void push(QByteArray &&chunk)
     {
-        {
-            QMutexLocker lock(&m_mutex);
-            if (m_chunks.size() >= m_capacity && !m_chunks.empty())
-                m_chunks.pop_front();
-            m_chunks.push_back(std::move(chunk));
+        QMutexLocker lock(&m_mutex);
+        m_bytes += size_t(chunk.size());
+        m_chunks.push_back(std::move(chunk));
+        while (m_bytes > kMaxBytes && m_chunks.size() > 1) {
+            m_bytes -= size_t(m_chunks.front().size());
+            m_chunks.pop_front();
         }
     }
 
@@ -42,6 +47,7 @@ public:
             const qint64 take = qMin<qint64>(need, front.size());
             std::memcpy(dst + total, front.constData(), size_t(take));
             total += take;
+            m_bytes -= size_t(take);
             if (take == front.size())
                 m_chunks.pop_front();
             else
@@ -58,6 +64,7 @@ public:
     {
         QMutexLocker lock(&m_mutex);
         m_chunks.clear();
+        m_bytes = 0;
     }
 
     uint64_t underruns() const { return m_underruns.load(); }
@@ -65,16 +72,13 @@ public:
     size_t depthBytes() const
     {
         QMutexLocker lock(&m_mutex);
-        size_t bytes = 0;
-        for (const QByteArray &c : m_chunks)
-            bytes += size_t(c.size());
-        return bytes;
+        return m_bytes;
     }
 
 private:
-    static constexpr size_t m_capacity = 16;
     mutable QMutex m_mutex;
     std::deque<QByteArray> m_chunks;
+    size_t m_bytes = 0;
     std::atomic<uint64_t> m_underruns{0};
 };
 
@@ -161,6 +165,9 @@ public:
     void stop();
     void join();
     QString errorMessage() const { return m_error; }
+    // Current drift correction applied to the resampling ratio, in ppm
+    // (positive: draining a ring that was running full).
+    int driftPpm() const { return m_driftPpm.load(std::memory_order_relaxed); }
 
 private:
     void run();
@@ -170,5 +177,6 @@ private:
     void *m_handle = nullptr;
     QString m_error;
     std::atomic<bool> m_stop{false};
+    std::atomic<int> m_driftPpm{0};
     std::thread m_thread;
 };

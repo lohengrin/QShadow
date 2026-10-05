@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "audiodrift.h"
 
 #include <QAudio>
 #include <QAudioDevice>
@@ -7,6 +8,8 @@
 #include <QMediaDevices>
 
 #include <alsa/asoundlib.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -17,6 +20,11 @@ constexpr int kCaptureRate = 96000;
 constexpr int kOutputRate = 48000;
 constexpr snd_pcm_uframes_t kPeriodFrames = 480; // 5 ms @ 96 kHz
 constexpr snd_pcm_uframes_t kBufferFrames = kPeriodFrames * 4; // 20 ms
+// Ring fill the drift control steers towards, sampled just before each capture
+// chunk is pushed (so ~3 ms below the time-averaged depth). The sink pulls in
+// bursts, so the ring swings by a few ms around it; 8 ms keeps the time-averaged
+// depth near 11 ms: headroom against underruns without adding delay.
+constexpr double kTargetRingFrames = 8.0 * 48.0; // 8 ms
 
 } // namespace
 
@@ -190,6 +198,11 @@ void AudioCapture::run()
 
     std::vector<int16_t> input(kPeriodFrames);
     std::vector<int16_t> pending; // leftover odd sample between reads
+    std::vector<float> mono;      // 48 kHz mono after the 2:1 average
+    std::vector<float> resampled; // after drift-compensated resampling
+
+    DriftController controller(kTargetRingFrames);
+    DriftResampler resampler;
 
     while (!m_stop.load()) {
         const int wr = snd_pcm_wait(handle, 100);
@@ -216,28 +229,37 @@ void AudioCapture::run()
         if (n == 0)
             continue;
 
-        // 96 kHz mono S16 -> 48 kHz stereo S16 by averaging sample pairs,
-        // carrying a trailing odd sample across reads.
-        pending.reserve(pending.size() + size_t(n));
+        // 96 kHz mono S16 -> 48 kHz mono by averaging sample pairs, carrying a
+        // trailing odd sample across reads.
         pending.insert(pending.end(), input.begin(), input.begin() + n);
+        const size_t pairs = pending.size() / 2;
+        if (pairs == 0)
+            continue;
+        mono.resize(pairs);
+        for (size_t i = 0; i < pairs; ++i)
+            mono[i] = (float(pending[2 * i]) + float(pending[2 * i + 1])) * 0.5f;
+        pending.erase(pending.begin(), pending.begin() + std::ptrdiff_t(2 * pairs));
 
-        const size_t outFrames = pending.size() / 2;
-        if (outFrames == 0)
+        // Absorb the dongle/host clock difference by nudging the resampling
+        // ratio so the ring stays near its target fill.
+        const double step =
+            controller.update(double(m_ring->depthBytes()) / double(AudioRing::kBytesPerMs)
+                              * 48.0);
+        m_driftPpm.store(int(controller.adjust() * 1e6), std::memory_order_relaxed);
+        resampled.clear();
+        resampler.process(mono.data(), mono.size(), step, &resampled);
+        if (resampled.empty())
             continue;
 
-        QByteArray chunk(int(outFrames) * 4, Qt::Uninitialized);
+        // Mono -> stereo S16.
+        QByteArray chunk(int(resampled.size()) * 4, Qt::Uninitialized);
         auto *out = reinterpret_cast<int16_t *>(chunk.data());
-        for (size_t i = 0; i < outFrames; ++i) {
-            const int16_t l = pending[2 * i];
-            const int16_t r = pending[2 * i + 1];
-            const int16_t v = int16_t((int(l) + int(r)) / 2);
-            out[2 * i] = v;
-            out[2 * i + 1] = v;
+        for (size_t i = 0; i < resampled.size(); ++i) {
+            const float v = std::clamp(resampled[i], -32768.0f, 32767.0f);
+            const int16_t s = int16_t(std::lrintf(v));
+            out[2 * i] = s;
+            out[2 * i + 1] = s;
         }
-
-        auto endIt = pending.begin();
-        std::advance(endIt, 2 * outFrames);
-        pending.erase(pending.begin(), endIt);
         m_ring->push(std::move(chunk));
     }
 }
