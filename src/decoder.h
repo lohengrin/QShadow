@@ -1,8 +1,7 @@
 #pragma once
 
 #include "capture.h"
-
-#include <QImage>
+#include "videoframe.h"
 
 #include <array>
 #include <atomic>
@@ -10,17 +9,36 @@
 #include <functional>
 #include <thread>
 
-// Decodes MJPG frames (libjpeg-turbo) or converts raw YUYV frames to RGBA on
-// its own thread. Each decoded frame is handed to the sink callback, which runs
-// on the decoder thread and must be cheap and thread-safe (VideoWidget only
-// stores the newest frame: drop-on-backpressure). Frames are decoded into a
-// small pool of images that is recycled once the consumer has released them,
-// so there is no per-frame allocation or copy.
+// Geometry of the planar buffers for one JPEG (Y, Cb, Cr): real sample counts,
+// row stride in bytes, and the allocated row count (whole iMCU rows).
+struct YuvLayout {
+    int width[3];
+    int height[3];
+    int stride[3];
+    int rows[3];
+};
+
+// Decodes MJPG frames (libjpeg-turbo) or converts raw YUYV frames on its own
+// thread. Each decoded frame is handed to the sink callback, which runs on the
+// decoder thread and must be cheap and thread-safe (VideoWidget only stores the
+// newest frame: drop-on-backpressure).
+//
+// MJPG is decoded to planar Y/Cb/Cr and left for the GPU to convert whenever
+// the renderer says it can (setGpuYuvCheck) and the JPEG is plain 3-component
+// YCbCr; that skips the CPU colour conversion + chroma upsampling and halves
+// the bytes uploaded. Anything else (and YUYV) becomes RGBA on the CPU.
+//
+// Frames come from a small pool that is recycled once every other holder has
+// released them, so there is no per-frame allocation or copy.
 class Decoder {
 public:
-    using FrameSink = std::function<void(const QImage &, std::chrono::steady_clock::time_point)>;
+    using FrameSink = std::function<void(const VideoFramePtr &, std::chrono::steady_clock::time_point)>;
     Decoder(FrameQueue *queue, Stats *stats, FrameSink sink);
     ~Decoder();
+
+    // Called on the decoder thread before each MJPG frame; return true while the
+    // renderer can accept planar YUV frames. Set before start().
+    void setGpuYuvCheck(std::function<bool()> check) { m_gpuYuv = std::move(check); }
 
     void start();
     void stop();
@@ -28,13 +46,15 @@ public:
 
 private:
     void run();
-    QImage &acquireImage(int w, int h);
+    VideoFramePtr acquireRgba(int w, int h);
+    VideoFramePtr acquireYuv(const YuvLayout &layout);
     void convertYuyv(const Frame &frame, QImage &dst);
 
     FrameQueue *m_queue;
     Stats *m_stats;
     FrameSink m_sink;
-    std::array<QImage, 4> m_pool; // producer + consumer in flight + slack
+    std::function<bool()> m_gpuYuv;
+    std::array<VideoFramePtr, 4> m_pool; // producer + consumers in flight + slack
     size_t m_poolNext = 0;
     std::atomic<bool> m_stop{false};
     std::thread m_thread;

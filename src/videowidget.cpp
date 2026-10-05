@@ -16,9 +16,10 @@ QVulkanWindowRenderer *VideoWidget::createRenderer()
     return new VulkanRenderer(this);
 }
 
-void VideoWidget::submitFrame(const QImage &frame, std::chrono::steady_clock::time_point stamp)
+void VideoWidget::submitFrame(const VideoFramePtr &frame,
+                              std::chrono::steady_clock::time_point stamp)
 {
-    if (frame.isNull())
+    if (!frame)
         return;
     {
         QMutexLocker locker(&m_frameMutex);
@@ -38,9 +39,15 @@ void VideoWidget::submitFrame(const QImage &frame, std::chrono::steady_clock::ti
     }
 }
 
-void VideoWidget::setFrame(const QImage &frame)
+bool VideoWidget::gpuYuvSupported() const
 {
-    submitFrame(frame);
+    static const bool forcedCpu = !qEnvironmentVariableIsEmpty("QSHADOW_CPU_CONVERT");
+    return !forcedCpu && m_gpuYuv.load(std::memory_order_relaxed);
+}
+
+void VideoWidget::setGpuYuvSupported(bool supported)
+{
+    m_gpuYuv.store(supported, std::memory_order_relaxed);
 }
 
 void VideoWidget::setPreserveAspect(bool on)
@@ -140,13 +147,13 @@ void VideoWidget::noteSubmitted(std::chrono::steady_clock::time_point stamp)
     m_latencyUs.store(prev == 0 ? us : prev + (us - prev) / 60, std::memory_order_relaxed);
 }
 
-bool VideoWidget::takePendingFrame(QImage *out, std::chrono::steady_clock::time_point *stamp)
+bool VideoWidget::takePendingFrame(VideoFramePtr *out, std::chrono::steady_clock::time_point *stamp)
 {
     QMutexLocker locker(&m_frameMutex);
-    if (m_pending.isNull())
+    if (!m_pending)
         return false;
     *stamp = m_pendingStamp;
-    *out = m_pending;
-    m_pending = QImage();
+    *out = std::move(m_pending);
+    m_pending.reset();
     return true;
 }

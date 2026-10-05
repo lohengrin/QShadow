@@ -24,6 +24,7 @@ struct Stats {
     std::atomic<uint64_t> decodeNs{0};
     std::atomic<int> frameW{0};
     std::atomic<int> frameH{0};
+    std::atomic<bool> frameYuv{false}; // last frame went to the GPU as planar YUV
 };
 
 // One captured frame: a JPEG for MJPG, or raw packed pixels for YUYV

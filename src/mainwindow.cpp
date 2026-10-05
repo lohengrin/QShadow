@@ -372,9 +372,10 @@ bool MainWindow::startVideo()
     m_capture = new Capture(m_devicePath, target, format, &m_stats);
     VideoWidget *video = m_video;
     m_decoder = new Decoder(&m_queue, &m_stats,
-                            [video](const QImage &img, std::chrono::steady_clock::time_point stamp) {
-                                video->submitFrame(img, stamp);
+                            [video](const VideoFramePtr &frame, std::chrono::steady_clock::time_point stamp) {
+                                video->submitFrame(frame, stamp);
                             });
+    m_decoder->setGpuYuvCheck([video] { return video->gpuYuvSupported(); });
 
     m_capture->setQuiet(m_captureFailing);
     const bool capOk = m_capture->start(&m_queue);
@@ -497,13 +498,15 @@ void MainWindow::updateStatus()
         resText = QStringLiteral("%1x%2").arg(neg.width()).arg(neg.height());
 
     m_status->setText(QStringLiteral("Device: %1  |  negotiated %2  |  frame %3x%4  |  "
-                                     "audio: %5%6")
+                                     "audio: %5%6%7")
                           .arg(m_devicePath, resText)
                           .arg(w).arg(h)
                           .arg(m_audioSink.active() ? QStringLiteral("active")
                                                       : QStringLiteral("off"))
                           .arg(noFrames ? QStringLiteral("  |  NO FRAMES RECEIVED")
-                                        : QString()));
+                                        : QString())
+                          .arg(m_stats.frameYuv.load() ? QStringLiteral("  |  GPU YUV")
+                                                       : QString()));
 
     m_statsLabel->setText(QStringLiteral("cap %1 fps  dec %2 fps  dropped %3  decode %4 ms  "
                                          "latency %5 ms  audio buf %6 ms (%7 ppm)  underruns %8")

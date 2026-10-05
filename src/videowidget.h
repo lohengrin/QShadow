@@ -1,6 +1,7 @@
 #pragma once
 
-#include <QImage>
+#include "videoframe.h"
+
 #include <QMutex>
 #include <QSize>
 #include <QVulkanWindow>
@@ -64,18 +65,22 @@ public:
     // Hands the newest decoded frame to the renderer. Safe to call from any
     // thread (the decoder thread calls it directly, with no copy and no
     // queued payload); older undelivered frames are replaced.
-    void submitFrame(const QImage &frame,
+    void submitFrame(const VideoFramePtr &frame,
                      std::chrono::steady_clock::time_point stamp = std::chrono::steady_clock::now());
 
+    // True once the renderer can convert planar YUV frames on the GPU (and the
+    // user has not forced the CPU path with QSHADOW_CPU_CONVERT=1). Thread-safe.
+    bool gpuYuvSupported() const;
+    void setGpuYuvSupported(bool supported); // renderer only
+
 public slots:
-    void setFrame(const QImage &frame);     // GUI-thread convenience wrapper
     void setPreserveAspect(bool on);
     void setShaderMode(ShaderMode mode);
     void setDownscale(int factor);
 
 private:
     // Renderer reads these; mutex only guards the pending frame image.
-    bool takePendingFrame(QImage *out, std::chrono::steady_clock::time_point *stamp);
+    bool takePendingFrame(VideoFramePtr *out, std::chrono::steady_clock::time_point *stamp);
     void noteSubmitted(std::chrono::steady_clock::time_point stamp);
 
     friend class VulkanRenderer;
@@ -83,7 +88,8 @@ private:
     State m_state;
     std::atomic<bool> m_updatePosted{false};
     mutable QMutex m_frameMutex;
-    QImage m_pending;
+    VideoFramePtr m_pending;
+    std::atomic<bool> m_gpuYuv{false};
     std::chrono::steady_clock::time_point m_pendingStamp;
     std::atomic<int> m_latencyUs{0};
 };

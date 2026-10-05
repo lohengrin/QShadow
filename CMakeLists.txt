@@ -35,6 +35,7 @@ set(QSHADOW_SHADERS
   crt-royale.frag
   fsr_easu.comp
   fsr_rcas.comp
+  yuv2rgb.comp
 )
 
 set(QSHADOW_SPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/spv")
