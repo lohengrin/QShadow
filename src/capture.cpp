@@ -24,8 +24,9 @@ int xioctl(int fd, unsigned long request, void *arg)
 
 } // namespace
 
-Capture::Capture(const QString &devicePath, const QSize &targetSize, Stats *stats)
-    : m_devicePath(devicePath), m_targetSize(targetSize), m_stats(stats)
+Capture::Capture(const QString &devicePath, const QSize &targetSize,
+                 device::PixelFormat format, Stats *stats)
+    : m_devicePath(devicePath), m_targetSize(targetSize), m_format(format), m_stats(stats)
 {
 }
 
@@ -54,12 +55,12 @@ bool Capture::start(FrameQueue *out)
         return false;
     }
 
-    // Request MJPG at the target size; let the driver clamp to the nearest
+    // Request the pixel format at the target size; let the driver clamp to the nearest
     // supported mode and read back the actual negotiated format.
     struct v4l2_format fmt;
     std::memset(&fmt, 0, sizeof(fmt));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+    fmt.fmt.pix.pixelformat = device::toFourcc(m_format);
     fmt.fmt.pix.width = uint32_t(m_targetSize.width());
     fmt.fmt.pix.height = uint32_t(m_targetSize.height());
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
@@ -69,13 +70,22 @@ bool Capture::start(FrameQueue *out)
         m_fd = -1;
         return false;
     }
+    if (fmt.fmt.pix.pixelformat != device::toFourcc(m_format)) {
+        qWarning() << "Capture: driver refused the requested pixel format";
+        close(m_fd);
+        m_fd = -1;
+        return false;
+    }
     m_negotiated = QSize(fmt.fmt.pix.width, fmt.fmt.pix.height);
+    m_stride = int(fmt.fmt.pix.bytesperline);
+    if (m_format == device::PixelFormat::Yuyv && m_stride < m_negotiated.width() * 2)
+        m_stride = m_negotiated.width() * 2;
 
     // Fastest offered interval for the negotiated size.
     {
         struct v4l2_frmivalenum fiv;
         std::memset(&fiv, 0, sizeof(fiv));
-        fiv.pixel_format = V4L2_PIX_FMT_MJPEG;
+        fiv.pixel_format = device::toFourcc(m_format);
         fiv.width = uint32_t(m_negotiated.width());
         fiv.height = uint32_t(m_negotiated.height());
         double bestUs = 0.0;
@@ -210,10 +220,18 @@ void Capture::run()
         }
 
         const size_t used = buf.bytesused;
-        if (used > 0 && buf.index < uint32_t(m_bufferCount)) {
+        // A short YUYV frame (dropped USB packets) can't be converted: skip it.
+        const size_t rawSize = size_t(m_stride) * size_t(m_negotiated.height());
+        const bool complete = m_format == device::PixelFormat::Mjpg || used >= rawSize;
+        if (used > 0 && complete && buf.index < uint32_t(m_bufferCount)) {
             Frame frame;
             const char *src = static_cast<const char *>(m_buffers[buf.index].start);
-            frame.jpeg = QByteArray(src, int(used));
+            frame.format = m_format;
+            frame.width = m_negotiated.width();
+            frame.height = m_negotiated.height();
+            frame.stride = m_stride;
+            frame.data = QByteArray(src, int(m_format == device::PixelFormat::Yuyv
+                                                 ? rawSize : used));
             m_stats->captured.fetch_add(1);
             m_queue->push(std::move(frame));
         }

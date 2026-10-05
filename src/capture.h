@@ -1,5 +1,7 @@
 #pragma once
 
+#include "device.h"
+
 #include <QByteArray>
 #include <QSize>
 #include <QString>
@@ -23,8 +25,14 @@ struct Stats {
     std::atomic<int> frameH{0};
 };
 
+// One captured frame: a JPEG for MJPG, or raw packed pixels for YUYV
+// (width/height/stride describe the raw layout; unused for MJPG).
 struct Frame {
-    QByteArray jpeg;
+    QByteArray data;
+    device::PixelFormat format = device::PixelFormat::Mjpg;
+    int width = 0;
+    int height = 0;
+    int stride = 0;
 };
 
 // Bounded queue between the capture and decode threads. Pushes drop the oldest
@@ -71,11 +79,12 @@ private:
     std::deque<Frame> m_queue;
 };
 
-// V4L2 MJPG capture using mmap streaming, run on its own thread.
+// V4L2 MJPG/YUYV capture using mmap streaming, run on its own thread.
 // One captured frame in -> one Frame out; never blocks the decoder.
 class Capture {
 public:
-    Capture(const QString &devicePath, const QSize &targetSize, Stats *stats);
+    Capture(const QString &devicePath, const QSize &targetSize,
+            device::PixelFormat format, Stats *stats);
     ~Capture();
 
     bool start(FrameQueue *out);
@@ -90,6 +99,8 @@ private:
 
     QString m_devicePath;
     QSize m_targetSize;
+    device::PixelFormat m_format;
+    int m_stride = 0;
     Stats *m_stats;
     FrameQueue *m_queue = nullptr;
 

@@ -8,11 +8,14 @@ Qt6 desktop application that captures video and audio from a GENKI ShadowCast
 USB capture dongle (`298f:1996`, uvcvideo + USB-audio) and displays it on the
 host with minimal latency.
 
-- Video: V4L2 MJPG → libjpeg-turbo decode → Vulkan (QVulkanWindow) display,
+- Video: V4L2 MJPG → libjpeg-turbo decode, or uncompressed YUYV (BT.601
+  limited range, CPU-converted to RGBA in the decoder thread; artifact-free but
+  USB 2.0 limits it to ≤720x480@30 / 720x576@25 / 800x600@20 / 1280x720@10)
+  → Vulkan (QVulkanWindow) display,
   auto-adapts to the source's active resolution/rate and preserves aspect ratio.
 - Audio: ALSA capture from the dongle (S16_LE mono 96 kHz) → resampled to
   stereo 48 kHz float → host default output via Qt Multimedia `QAudioSink`.
-- Settings (window geometry, aspect toggle, selected resolution, shader,
+- Settings (window geometry, aspect toggle, pixel format, selected resolution, shader,
   downscale, volume) persist in `QSettings` and are restored on the next launch.
 - Platform: Linux, Wayland only. Native ALSA/V4L2, no GStreamer.
 - Rendering: `QVulkanWindow` + a `QVulkanWindowRenderer` (`VulkanRenderer`).

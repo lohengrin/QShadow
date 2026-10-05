@@ -9,8 +9,8 @@
 
 class QObject;
 
-// Decodes MJPG frames from the capture queue with libjpeg-turbo on its own
-// thread. Each decoded frame is handed to the GUI thread via a queued
+// Decodes MJPG frames (libjpeg-turbo) or converts raw YUYV frames to RGBA on
+// its own thread. Each decoded frame is handed to the GUI thread via a queued
 // QMetaObject call on the target widget, which only ever stores the newest
 // frame (drop-on-backpressure).
 class Decoder {
@@ -24,6 +24,7 @@ public:
 
 private:
     void run();
+    void convertYuyv(const Frame &frame);
 
     FrameQueue *m_queue;
     Stats *m_stats;
