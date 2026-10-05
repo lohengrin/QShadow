@@ -88,31 +88,37 @@ QString findShadowCastDevice()
     return {};
 }
 
-QList<QSize> enumerateMjpgSizes(const QString &devicePath)
+uint32_t toFourcc(PixelFormat format)
 {
+    return format == PixelFormat::Yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+}
+
+QList<QSize> enumerateSizes(const QString &devicePath, PixelFormat format)
+{
+    const uint32_t fourcc = toFourcc(format);
     QList<QSize> sizes;
     const int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDWR | O_NONBLOCK);
     if (fd < 0)
         return sizes;
 
-    // Confirm MJPEG is offered.
+    // Confirm the format is offered.
     struct v4l2_fmtdesc fmt;
     std::memset(&fmt, 0, sizeof(fmt));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    bool mjpeg = false;
+    bool offered = false;
     while (ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0) {
-        if (fmt.pixelformat == V4L2_PIX_FMT_MJPEG)
-            mjpeg = true;
+        if (fmt.pixelformat == fourcc)
+            offered = true;
         ++fmt.index;
     }
-    if (!mjpeg) {
+    if (!offered) {
         close(fd);
         return sizes;
     }
 
     struct v4l2_frmsizeenum fsize;
     std::memset(&fsize, 0, sizeof(fsize));
-    fsize.pixel_format = V4L2_PIX_FMT_MJPEG;
+    fsize.pixel_format = fourcc;
     while (ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &fsize) == 0) {
         switch (fsize.type) {
         case V4L2_FRMSIZE_TYPE_DISCRETE:
@@ -140,7 +146,7 @@ QList<QSize> enumerateMjpgSizes(const QString &devicePath)
     return sizes;
 }
 
-int maxFpsForSize(const QString &devicePath, const QSize &size)
+int maxFpsForSize(const QString &devicePath, const QSize &size, PixelFormat format)
 {
     const int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDWR | O_NONBLOCK);
     if (fd < 0)
@@ -148,7 +154,7 @@ int maxFpsForSize(const QString &devicePath, const QSize &size)
 
     struct v4l2_frmivalenum fiv;
     std::memset(&fiv, 0, sizeof(fiv));
-    fiv.pixel_format = V4L2_PIX_FMT_MJPEG;
+    fiv.pixel_format = toFourcc(format);
     fiv.width = uint32_t(size.width());
     fiv.height = uint32_t(size.height());
 

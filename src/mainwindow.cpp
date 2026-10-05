@@ -21,6 +21,7 @@
 #include <QWidget>
 
 #include <chrono>
+#include <cmath>
 
 MainWindow::MainWindow(QVulkanInstance *vulkan, QWidget *parent)
     : QMainWindow(parent)
@@ -62,6 +63,15 @@ void MainWindow::buildUi()
     m_aspectCheck = new QCheckBox(QStringLiteral("Preserve aspect"), toolbar);
     m_aspectCheck->setChecked(true);
     toolbar->addWidget(m_aspectCheck);
+
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral(" Format: "), toolbar));
+    m_formatCombo = new QComboBox(toolbar);
+    m_formatCombo->setToolTip(QStringLiteral(
+        "MJPG: compressed, up to 60 fps but with JPEG artifacts.\n"
+        "YUYV: uncompressed and artifact-free, but limited by USB 2.0 "
+        "bandwidth to low resolutions / frame rates."));
+    toolbar->addWidget(m_formatCombo);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral(" Resolution: "), toolbar));
@@ -116,6 +126,11 @@ void MainWindow::buildUi()
     toolbar->addWidget(m_volumeSlider);
 
     toolbar->addSeparator();
+    m_fitAction = new QAction(QStringLiteral("Fit"), toolbar);
+    m_fitAction->setToolTip(QStringLiteral(
+        "Resize the window so every pipeline-output pixel maps 1:1 to a "
+        "screen pixel for the current shader and downscale"));
+    toolbar->addAction(m_fitAction);
     m_fullscreenAction = new QAction(QStringLiteral("Fullscreen"), toolbar);
     m_fullscreenAction->setCheckable(true);
     m_fullscreenAction->setShortcut(QKeySequence(Qt::Key_F11));
@@ -140,6 +155,7 @@ void MainWindow::buildUi()
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](int v) {
         m_audioSink.setVolume(qreal(v) / 100.0);
     });
+    connect(m_formatCombo, &QComboBox::activated, this, &MainWindow::onFormatChanged);
     connect(m_resCombo, &QComboBox::activated, this, &MainWindow::onResolutionChanged);
     connect(m_shaderCombo, qOverload<int>(&QComboBox::activated), this,
             [this](int index) {
@@ -151,6 +167,7 @@ void MainWindow::buildUi()
                 m_video->setDownscale(m_downscaleCombo->itemData(index).toInt());
             });
     connect(m_fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
+    connect(m_fitAction, &QAction::triggered, this, &MainWindow::fitToPipeline);
 
     // Esc leaves fullscreen.
     auto *escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
@@ -171,6 +188,32 @@ void MainWindow::toggleFullscreen()
     m_fullscreenAction->setChecked(isFullScreen());
 }
 
+void MainWindow::fitToPipeline()
+{
+    // The pipeline works on the decoded frame, not the negotiated capture
+    // size, so trust the last frame the decoder produced.
+    const QSize frame(m_stats.frameW.load(), m_stats.frameH.load());
+    if (frame.isEmpty() || frame.width() < 1 || frame.height() < 1)
+        return;
+
+    const int mode = m_shaderCombo->currentData().toInt();
+    const int downscale = m_downscaleCombo->currentData().toInt();
+    const QSize out = VideoWidget::pipelineOutputSize(frame, mode, downscale);
+    if (out.isEmpty() || out.width() < 1 || out.height() < 1)
+        return;
+
+    if (isFullScreen() || isMaximized())
+        showNormal();
+
+    // The swapchain is sized in device pixels; convert back to widget (logical)
+    // pixels using the current DPR so the surface is exactly `out` pixels.
+    const qreal dpr = m_video->devicePixelRatio();
+    const QSize widgetTarget(std::ceil(out.width() / dpr), std::ceil(out.height() / dpr));
+    const QSize chrome = size() - m_video->size();
+    resize(widgetTarget + chrome);
+    m_video->requestUpdate();
+}
+
 void MainWindow::findDevices()
 {
     m_devicePath = device::findShadowCastDevice();
@@ -179,20 +222,38 @@ void MainWindow::findDevices()
         return;
     }
 
-    m_sizes = device::enumerateMjpgSizes(m_devicePath);
+    for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
+        const QList<QSize> sizes = device::enumerateSizes(m_devicePath, format);
+        if (sizes.isEmpty())
+            continue;
+        m_sizes.insert(int(format), sizes);
+        m_formatCombo->addItem(format == device::PixelFormat::Mjpg
+                                   ? QStringLiteral("MJPG") : QStringLiteral("YUYV"),
+                               int(format));
+    }
     if (m_sizes.isEmpty()) {
-        showDeviceError(QStringLiteral("ShadowCast offers no MJPG capture sizes."));
+        showDeviceError(QStringLiteral("ShadowCast offers no MJPG or YUYV capture sizes."));
         m_devicePath.clear();
         return;
     }
-
-    for (const QSize &s : m_sizes) {
-        const int fps = device::maxFpsForSize(m_devicePath, s);
-        m_resCombo->addItem(QStringLiteral("%1x%2 @ %3 fps").arg(s.width()).arg(s.height()).arg(fps),
-                            s);
-    }
+    populateResolutions(QSize());
 
     m_audioCard = findShadowCastAudioCard();
+}
+
+void MainWindow::populateResolutions(const QSize &preferred)
+{
+    const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
+    const QSignalBlocker blocker(m_resCombo);
+    m_resCombo->clear();
+    for (const QSize &s : m_sizes.value(int(format))) {
+        const int fps = device::maxFpsForSize(m_devicePath, s, format);
+        m_resCombo->addItem(
+            QStringLiteral("%1x%2 @ %3 fps").arg(s.width()).arg(s.height()).arg(fps), s);
+    }
+    const int idx = m_resCombo->findData(preferred);
+    if (idx >= 0)
+        m_resCombo->setCurrentIndex(idx);
 }
 
 void MainWindow::loadSettings()
@@ -228,16 +289,14 @@ void MainWindow::loadSettings()
     // also hand it to a not-yet-open sink so it takes effect on start.
     m_audioSink.setVolume(qreal(m_volumeSlider->value()) / 100.0);
 
+    if (settings.contains(QStringLiteral("pixelFormat"))) {
+        const int idx = m_formatCombo->findData(settings.value(QStringLiteral("pixelFormat")).toInt());
+        if (idx >= 0)
+            m_formatCombo->setCurrentIndex(idx);
+    }
     const QSize saved(settings.value(QStringLiteral("videoWidth")).toInt(),
                       settings.value(QStringLiteral("videoHeight")).toInt());
-    if (saved.isValid()) {
-        for (int i = 0; i < m_resCombo->count(); ++i) {
-            if (m_resCombo->itemData(i).toSize() == saved) {
-                m_resCombo->setCurrentIndex(i);
-                break;
-            }
-        }
-    }
+    populateResolutions(saved);
     m_video->setPreserveAspect(m_aspectCheck->isChecked());
 }
 
@@ -252,6 +311,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("downscale"), m_downscaleCombo->currentData().toInt());
 
     const QSize res = m_resCombo->currentData().toSize();
+    settings.setValue(QStringLiteral("pixelFormat"), m_formatCombo->currentData().toInt());
     if (res.isValid()) {
         settings.setValue(QStringLiteral("videoWidth"), res.width());
         settings.setValue(QStringLiteral("videoHeight"), res.height());
@@ -271,7 +331,8 @@ void MainWindow::startPipeline()
     stopPipeline();
     m_ring.clear();
 
-    m_capture = new Capture(m_devicePath, target, &m_stats);
+    const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
+    m_capture = new Capture(m_devicePath, target, format, &m_stats);
     m_decoder = new Decoder(&m_queue, &m_stats, m_video, "setFrame");
     m_audio = new AudioCapture(&m_ring, &m_stats);
 
@@ -310,6 +371,15 @@ void MainWindow::stopPipeline()
         m_audio = nullptr;
     }
     m_audioSink.close();
+}
+
+void MainWindow::onFormatChanged(int index)
+{
+    if (index < 0)
+        return;
+    // Keep the current size if the new format offers it, else its largest.
+    populateResolutions(m_resCombo->currentData().toSize());
+    startPipeline();
 }
 
 void MainWindow::onResolutionChanged(int index)

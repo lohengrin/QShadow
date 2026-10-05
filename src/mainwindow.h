@@ -6,6 +6,7 @@
 #include "videowidget.h"
 
 #include <QComboBox>
+#include <QHash>
 #include <QList>
 #include <QMainWindow>
 #include <QSize>
@@ -27,13 +28,16 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private slots:
+    void onFormatChanged(int index);
     void onResolutionChanged(int index);
     void updateStatus();
     void toggleFullscreen();
+    void fitToPipeline();
 
 private:
     void buildUi();
     void findDevices();
+    void populateResolutions(const QSize &preferred);
     void loadSettings();
     void saveSettings();
     void startPipeline();
@@ -41,19 +45,21 @@ private:
     void showDeviceError(const QString &message);
 
     QString m_devicePath;
-    QList<QSize> m_sizes;
+    QHash<int, QList<QSize>> m_sizes; // keyed by device::PixelFormat
     int m_audioCard = -1;
 
     QVulkanInstance *m_vulkanInstance = nullptr;
     VideoWidget *m_video = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
+    QComboBox *m_formatCombo = nullptr;
     QComboBox *m_resCombo = nullptr;
     QComboBox *m_shaderCombo = nullptr;
     QComboBox *m_downscaleCombo = nullptr;
     QCheckBox *m_aspectCheck = nullptr;
     QSlider *m_volumeSlider = nullptr;
     QAction *m_fullscreenAction = nullptr;
+    QAction *m_fitAction = nullptr;
 
     Stats m_stats;
     FrameQueue m_queue{3};
