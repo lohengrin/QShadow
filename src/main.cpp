@@ -7,10 +7,12 @@
 
 int main(int argc, char *argv[])
 {
-    // Wayland-only target; prefer the wayland QPA plugin when a Wayland display
+#ifdef Q_OS_LINUX
+    // Linux is Wayland-only; prefer the wayland QPA plugin when a Wayland display
     // is available so we never touch the X11 stack.
     if (!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
         qputenv("QT_QPA_PLATFORM", "wayland");
+#endif
 
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("qshadow"));

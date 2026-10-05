@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cmath>
+#include <cstring>
 #include <mutex>
 #include <set>
 
@@ -350,6 +351,43 @@ private slots:
         // Stride not a multiple of 4 bytes.
         QVERIFY(h.feed(yuyvFrame(6, 2, 14, QByteArray(28, 'x'))));
         QCOMPARE(h.last()->kind, VideoFrame::Kind::Rgba);
+    }
+
+    // ---- BufferPool (capture buffer recycling) ----
+    void bufferPoolRecyclesReleasedBuffersInPlace()
+    {
+        BufferPool pool;
+        pool.reserve(1000);
+        char a[800], b[500];
+        std::memset(a, 1, sizeof(a));
+        std::memset(b, 2, sizeof(b));
+        QByteArray first = pool.take(a, sizeof(a));
+        const char *storage = first.constData();
+        QCOMPARE(first.size(), 800);
+        QCOMPARE(first[799], char(1));
+        first = QByteArray(); // consumer lets go
+        QByteArray second = pool.take(b, sizeof(b));
+        QCOMPARE(second.constData(), storage); // same storage, no allocation
+        QCOMPARE(second.size(), 500);
+        QCOMPARE(second[0], char(2));
+    }
+
+    void bufferPoolNeverOverwritesBuffersStillInUse()
+    {
+        BufferPool pool;
+        pool.reserve(100);
+        char data[100];
+        std::memset(data, 7, sizeof(data));
+        std::vector<QByteArray> held;
+        for (size_t i = 0; i < BufferPool::kCount + 3; ++i) { // more than the pool holds
+            held.push_back(pool.take(data, sizeof(data)));
+            data[0] = char(i);                                  // mutate source afterwards
+        }
+        std::set<const char *> distinct;
+        for (const QByteArray &h : held)
+            distinct.insert(h.constData());
+        QCOMPARE(distinct.size(), held.size()); // exhaustion falls back to fresh buffers
+        QCOMPARE(held[0][0], char(7));          // earliest buffer untouched by later takes
     }
 };
 

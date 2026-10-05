@@ -1,4 +1,6 @@
-#include "capture.h"
+#include "v4l2_capture.h"
+
+#include "v4l2_common.h"
 
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
@@ -13,15 +15,6 @@
 #include <QDebug>
 
 namespace {
-
-int xioctl(int fd, unsigned long request, void *arg)
-{
-    int r;
-    do {
-        r = ioctl(fd, request, arg);
-    } while (r == -1 && errno == EINTR);
-    return r;
-}
 
 // Host arrival time of a dequeued buffer. uvcvideo stamps buffers with
 // CLOCK_MONOTONIC (the same clock as steady_clock on Linux) at the first USB
@@ -43,32 +36,19 @@ std::chrono::steady_clock::time_point frameStamp(const v4l2_buffer &buf)
 
 } // namespace
 
-Capture::Capture(const QString &devicePath, const QSize &targetSize,
-                 device::PixelFormat format, Stats *stats)
+V4l2Capture::V4l2Capture(const QString &devicePath, const QSize &targetSize,
+                         device::PixelFormat format, Stats *stats)
     : m_devicePath(devicePath), m_targetSize(targetSize), m_format(format), m_stats(stats)
 {
 }
 
-Capture::~Capture()
+V4l2Capture::~V4l2Capture()
 {
     stop();
     join();
 }
 
-QByteArray Capture::takeBuffer(const char *src, size_t used)
-{
-    for (QByteArray &b : m_pool) {
-        // isDetached(): nobody else shares this array, so overwriting is safe.
-        if (b.isDetached() && size_t(b.capacity()) >= used) {
-            b.resize(qsizetype(used)); // within capacity: no reallocation
-            std::memcpy(b.data(), src, used);
-            return b; // shared copy; the pool keeps its reference
-        }
-    }
-    return QByteArray(src, qsizetype(used));
-}
-
-QDebug Capture::warn()
+QDebug V4l2Capture::warn()
 {
     if (m_quiet) {
         m_discard.clear();
@@ -77,7 +57,7 @@ QDebug Capture::warn()
     return qWarning();
 }
 
-bool Capture::start(FrameQueue *out)
+bool V4l2Capture::start(FrameQueue *out)
 {
     m_queue = out;
 
@@ -101,7 +81,7 @@ bool Capture::start(FrameQueue *out)
     struct v4l2_format fmt;
     std::memset(&fmt, 0, sizeof(fmt));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.pixelformat = device::toFourcc(m_format);
+    fmt.fmt.pix.pixelformat = toFourcc(m_format);
     fmt.fmt.pix.width = uint32_t(m_targetSize.width());
     fmt.fmt.pix.height = uint32_t(m_targetSize.height());
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
@@ -111,7 +91,7 @@ bool Capture::start(FrameQueue *out)
         m_fd = -1;
         return false;
     }
-    if (fmt.fmt.pix.pixelformat != device::toFourcc(m_format)) {
+    if (fmt.fmt.pix.pixelformat != toFourcc(m_format)) {
         warn() << "Capture: driver refused the requested pixel format";
         close(m_fd);
         m_fd = -1;
@@ -126,7 +106,7 @@ bool Capture::start(FrameQueue *out)
     {
         struct v4l2_frmivalenum fiv;
         std::memset(&fiv, 0, sizeof(fiv));
-        fiv.pixel_format = device::toFourcc(m_format);
+        fiv.pixel_format = toFourcc(m_format);
         fiv.width = uint32_t(m_negotiated.width());
         fiv.height = uint32_t(m_negotiated.height());
         double bestUs = 0.0;
@@ -196,10 +176,7 @@ bool Capture::start(FrameQueue *out)
         size_t largest = 0;
         for (int i = 0; i < m_bufferCount; ++i)
             largest = std::max(largest, m_buffers[i].length);
-        for (QByteArray &b : m_pool) {
-            b = QByteArray();
-            b.reserve(qsizetype(largest));
-        }
+        m_pool.reserve(largest);
     }
 
     if (xioctl(m_fd, VIDIOC_STREAMON, &fmt.type) < 0) {
@@ -214,12 +191,12 @@ bool Capture::start(FrameQueue *out)
     return true;
 }
 
-void Capture::stop()
+void V4l2Capture::stop()
 {
     m_stop.store(true);
 }
 
-void Capture::join()
+void V4l2Capture::join()
 {
     if (m_thread.joinable())
         m_thread.join();
@@ -238,7 +215,7 @@ void Capture::join()
     m_bufferCount = 0;
 }
 
-void Capture::run()
+void V4l2Capture::run()
 {
     struct pollfd pfd;
     pfd.fd = m_fd;
@@ -282,7 +259,7 @@ void Capture::run()
             frame.width = m_negotiated.width();
             frame.height = m_negotiated.height();
             frame.stride = m_stride;
-            frame.data = takeBuffer(src, m_format == device::PixelFormat::Yuyv ? rawSize : used);
+            frame.data = m_pool.take(src, m_format == device::PixelFormat::Yuyv ? rawSize : used);
             m_stats->captured.fetch_add(1);
             m_queue->push(std::move(frame));
         }

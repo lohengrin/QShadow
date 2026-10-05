@@ -1,7 +1,5 @@
 #pragma once
 
-#include "capture.h"
-
 #include <QByteArray>
 #include <QIODevice>
 #include <QMutex>
@@ -11,7 +9,6 @@
 #include <cstring>
 #include <cstdint>
 #include <deque>
-#include <thread>
 
 class QAudioSink;
 
@@ -130,9 +127,6 @@ private:
     QByteArray m_scratch;
 };
 
-// Finds the ALSA card index of the ShadowCast audio device (-1 if absent).
-int findShadowCastAudioCard();
-
 // Qt/QAudioSink output to the host default speaker via the ring.
 class AudioSink {
 public:
@@ -152,31 +146,4 @@ private:
     HostAudioSink *m_host = nullptr;
     bool m_active = false;
     qreal m_volume = 1.0;
-};
-
-// ALSA capture from the ShadowCast card (S16_LE mono 96 kHz), resampled to
-// S16 stereo 48 kHz and pushed into the ring. Runs on its own thread.
-class AudioCapture {
-public:
-    AudioCapture(AudioRing *ring, Stats *stats);
-    ~AudioCapture();
-
-    bool start(int cardIndex);
-    void stop();
-    void join();
-    QString errorMessage() const { return m_error; }
-    // Current drift correction applied to the resampling ratio, in ppm
-    // (positive: draining a ring that was running full).
-    int driftPpm() const { return m_driftPpm.load(std::memory_order_relaxed); }
-
-private:
-    void run();
-
-    AudioRing *m_ring;
-    Stats *m_stats;
-    void *m_handle = nullptr;
-    QString m_error;
-    std::atomic<bool> m_stop{false};
-    std::atomic<int> m_driftPpm{0};
-    std::thread m_thread;
 };

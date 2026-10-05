@@ -2,6 +2,7 @@
 
 #include "decoder.h"
 #include "device.h"
+#include "platform/platform.h"
 #include "videowidget.h"
 
 #include <QCheckBox>
@@ -226,7 +227,8 @@ void MainWindow::fitToPipeline()
 
 bool MainWindow::connectDevice()
 {
-    const QString path = device::findShadowCastDevice();
+    const platform::DeviceIds ids = platform::findDevice();
+    const QString path = ids.video;
     if (path.isEmpty()) {
         m_devicePath.clear();
         m_sizes.clear();
@@ -235,7 +237,7 @@ bool MainWindow::connectDevice()
 
     QHash<int, QList<device::Mode>> sizes;
     for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
-        const QList<device::Mode> list = device::enumerateModes(path, format);
+        const QList<device::Mode> list = platform::enumerateModes(path, format);
         if (!list.isEmpty())
             sizes.insert(int(format), list);
     }
@@ -266,7 +268,7 @@ bool MainWindow::connectDevice()
         }
         populateResolutions(m_prefSize);
     }
-    m_audioCard = findShadowCastAudioCard();
+    m_audioId = ids.audio;
     return true;
 }
 
@@ -369,7 +371,7 @@ bool MainWindow::startVideo()
 
     m_queue.clear();
     const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
-    m_capture = new Capture(m_devicePath, target, format, &m_stats);
+    m_capture = platform::createCapture(m_devicePath, target, format, &m_stats);
     VideoWidget *video = m_video;
     m_decoder = new Decoder(&m_queue, &m_stats,
                             [video](const VideoFramePtr &frame, std::chrono::steady_clock::time_point stamp) {
@@ -391,8 +393,7 @@ void MainWindow::stopVideo()
     if (m_capture) {
         m_capture->stop();
         m_capture->join();
-        delete m_capture;
-        m_capture = nullptr;
+        m_capture.reset();
     }
     if (m_decoder) {
         m_decoder->stop();
@@ -405,12 +406,12 @@ void MainWindow::stopVideo()
 void MainWindow::startAudio()
 {
     m_ring.clear();
-    m_audio = new AudioCapture(&m_ring, &m_stats);
+    m_audio = platform::createAudioInput(m_audioId, &m_ring, &m_stats);
 
     QString audioErr;
     if (!m_audioSink.open(&m_ring, &audioErr))
         qWarning() << "Audio output:" << audioErr;
-    if (!m_audio->start(m_audioCard))
+    if (!m_audio->start())
         qWarning() << "Audio capture:" << m_audio->errorMessage();
 }
 
@@ -419,8 +420,7 @@ void MainWindow::stopAudio()
     if (m_audio) {
         m_audio->stop();
         m_audio->join();
-        delete m_audio;
-        m_audio = nullptr;
+        m_audio.reset();
     }
     m_audioSink.close();
 }

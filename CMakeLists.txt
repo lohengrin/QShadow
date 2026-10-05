@@ -11,7 +11,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Multimedia)
-find_package(ALSA REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -103,24 +102,50 @@ endforeach()
 #
 # Everything except main() lives in a static library so the tests link the very
 # same code. Qt resources (the SPIR-V shaders) belong to the executable.
-# ---------------------------------------------------------------------------
+
+# Platform backend: everything that talks to the operating system's capture stack
+# lives behind the interfaces in src/platform/platform.h, one directory per OS.
+if(UNIX AND NOT APPLE)
+  find_package(ALSA REQUIRED)
+  set(QSHADOW_PLATFORM_SOURCES
+    src/platform/linux/platform_linux.cpp
+    src/platform/linux/sysfs_usb.h src/platform/linux/sysfs_usb.cpp
+    src/platform/linux/v4l2_common.h
+    src/platform/linux/v4l2_device.h src/platform/linux/v4l2_device.cpp
+    src/platform/linux/v4l2_capture.h src/platform/linux/v4l2_capture.cpp
+    src/platform/linux/alsa_audio.h src/platform/linux/alsa_audio.cpp
+  )
+  set(QSHADOW_PLATFORM_LIBS ALSA::ALSA)
+else()
+  message(FATAL_ERROR "QShadow has no capture backend for this platform yet "
+                      "(see src/platform/platform.h for the interfaces to implement)")
+endif()
+
 add_library(qshadow_core STATIC
-  src/device.h src/device.cpp
-  src/capture.h src/capture.cpp
+  src/device.h
+  src/capture.h
   src/decoder.h src/decoder.cpp
   src/videoframe.h
   src/videowidget.h src/videowidget.cpp
   src/vulkanrenderer.h src/vulkanrenderer.cpp
   src/fsrconsts.h
-  src/audio.h src/audio.cpp src/audiodrift.h
+  src/audio.h src/audio.cpp
+  src/audiodrift.h
+  src/audiopipeline.h src/audiopipeline.cpp
+  src/platform/platform.h
   src/mainwindow.h src/mainwindow.cpp
+  ${QSHADOW_PLATFORM_SOURCES}
 )
 target_include_directories(qshadow_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(qshadow_core PUBLIC
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia
-  ALSA::ALSA JPEG::JPEG Threads::Threads Vulkan::Vulkan
+  JPEG::JPEG Threads::Threads Vulkan::Vulkan ${QSHADOW_PLATFORM_LIBS}
 )
-target_compile_options(qshadow_core PUBLIC -Wall -Wextra)
+if(MSVC)
+  target_compile_options(qshadow_core PUBLIC /W4)
+else()
+  target_compile_options(qshadow_core PUBLIC -Wall -Wextra)
+endif()
 
 qt_add_executable(qshadow
   resources.qrc
@@ -143,9 +168,11 @@ target_link_libraries(qshadow PRIVATE qshadow_core)
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 install(TARGETS qshadow RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-install(FILES qshadow.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
-install(FILES qshadow.svg
-        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
+if(UNIX AND NOT APPLE)
+  install(FILES qshadow.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+  install(FILES qshadow.svg
+          DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests (no dongle, GPU or display needed): ctest --test-dir build

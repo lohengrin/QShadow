@@ -1,70 +1,27 @@
-#include "device.h"
+#include "v4l2_device.h"
+
+#include "sysfs_usb.h"
+#include "v4l2_common.h"
 
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 
-#include <linux/videodev2.h>
-#include <sys/ioctl.h>
 #include <algorithm>
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
-#include <cstring>
 
-namespace device {
+namespace v4l2dev {
 
-namespace {
-
-QString readSysfs(const QString &path)
+QString findNode()
 {
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly))
-        return {};
-    return QString::fromLatin1(f.readAll().trimmed());
-}
-
-// Walk up from the video4linux dir towards the root looking for a sysfs USB
-// device node with the given vendor/product IDs.
-bool usbVidPidOnPath(QString dir, int vid, int pid)
-{
-    while (true) {
-        while (dir.endsWith('/'))
-            dir.chop(1);
-        if (dir.isEmpty() || dir == "/" || dir.startsWith("/sys/class"))
-            break;
-
-        const QString vidPath = dir + "/idVendor";
-        const QString pidPath = dir + "/idProduct";
-        if (QFile::exists(vidPath) && QFile::exists(pidPath)) {
-            bool okV = false;
-            bool okP = false;
-            const int v = readSysfs(vidPath).toInt(&okV, 16);
-            const int p = readSysfs(pidPath).toInt(&okP, 16);
-            if (okV && okP && v == vid && p == pid)
-                return true;
-        }
-        const int slash = dir.lastIndexOf('/');
-        if (slash <= 0)
-            break;
-        dir = dir.left(slash);
-    }
-    return false;
-}
-
-} // namespace
-
-QString findShadowCastDevice()
-{
-    constexpr int kVendor = 0x298f;
-    constexpr int kProduct = 0x1996;
-
     QDir root(QStringLiteral("/sys/class/video4linux"));
     const QStringList nodes = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &node : nodes) {
         const QString resolved = QFileInfo(root.filePath(node)).symLinkTarget();
         if (resolved.isEmpty() || !resolved.startsWith(QStringLiteral("/sys/devices")))
             continue;
-        if (!usbVidPidOnPath(resolved, kVendor, kProduct))
+        if (!sysfs_usb::vidPidOnPath(resolved, device::kUsbVendorId, device::kUsbProductId))
             continue;
 
         const QString devPath = QStringLiteral("/dev/") + node;
@@ -86,11 +43,6 @@ QString findShadowCastDevice()
             return devPath;
     }
     return {};
-}
-
-uint32_t toFourcc(PixelFormat format)
-{
-    return format == PixelFormat::Yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
 }
 
 namespace {
@@ -122,9 +74,9 @@ int maxFps(int fd, uint32_t fourcc, const QSize &size)
 
 } // namespace
 
-QList<Mode> enumerateModes(const QString &devicePath, PixelFormat format)
+QList<device::Mode> enumerateModes(const QString &devicePath, device::PixelFormat format)
 {
-    QList<Mode> modes;
+    QList<device::Mode> modes;
     const uint32_t fourcc = toFourcc(format);
     const int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDWR | O_NONBLOCK);
     if (fd < 0)
@@ -174,33 +126,9 @@ QList<Mode> enumerateModes(const QString &devicePath, PixelFormat format)
     sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
 
     for (const QSize &size : std::as_const(sizes))
-        modes.append(Mode{size, maxFps(fd, fourcc, size)});
+        modes.append(device::Mode{size, maxFps(fd, fourcc, size)});
     close(fd);
     return modes;
 }
 
-int findShadowCastAudioCard()
-{
-    constexpr int kVendor = 0x298f;
-    constexpr int kProduct = 0x1996;
-
-    // /sys/class/sound/cardN -> .../usbX/.../sound/cardN ; walk up to the USB
-    // device node carrying the vendor/product IDs.
-    QDir root(QStringLiteral("/sys/class/sound"));
-    const QStringList entries = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString &entry : entries) {
-        if (!entry.startsWith(QLatin1String("card")))
-            continue;
-        bool ok = false;
-        const int index = entry.mid(4).toInt(&ok);
-        if (!ok)
-            continue; // not a bare cardN node
-        const QString resolved = QFileInfo(root.filePath(entry)).symLinkTarget();
-        if (resolved.startsWith(QStringLiteral("/sys/devices"))
-            && usbVidPidOnPath(resolved, kVendor, kProduct))
-            return index;
-    }
-    return -1;
-}
-
-} // namespace device
+} // namespace v4l2dev

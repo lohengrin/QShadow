@@ -3,18 +3,15 @@
 #include "device.h"
 
 #include <QByteArray>
-#include <QDebug>
-#include <QSize>
-#include <QString>
 
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <mutex>
-#include <thread>
 
 struct Stats {
     std::atomic<uint64_t> captured{0};
@@ -36,7 +33,7 @@ struct Frame {
     int width = 0;
     int height = 0;
     int stride = 0;
-    // When the frame reached the host (V4L2 monotonic timestamp when the driver
+    // When the frame reached the host (the driver's capture timestamp when it
     // provides one, else the dequeue time); origin of the latency readout.
     std::chrono::steady_clock::time_point stamp;
 };
@@ -91,55 +88,39 @@ private:
     std::deque<Frame> m_queue;
 };
 
-// V4L2 MJPG/YUYV capture using mmap streaming, run on its own thread.
-// One captured frame in -> one Frame out; never blocks the decoder.
-class Capture {
+// A small pool of reusable frame buffers, so a capture backend does not
+// allocate for every frame. QByteArray is implicitly shared: a pooled array is
+// free again once every consumer (queue, decoder, widget, renderer) has dropped
+// its copy, which isDetached() reports.
+class BufferPool {
 public:
-    Capture(const QString &devicePath, const QSize &targetSize,
-            device::PixelFormat format, Stats *stats);
-    ~Capture();
+    // Capture queue (2) + decoder + widget pending + renderer + slack.
+    static constexpr size_t kCount = 8;
 
-    bool start(FrameQueue *out);
-    void stop();
-    void join();
+    // Pre-sizes every pooled array so recycling never reallocates.
+    void reserve(size_t capacityBytes)
+    {
+        for (QByteArray &b : m_pool) {
+            b = QByteArray();
+            b.reserve(qsizetype(capacityBytes));
+        }
+    }
 
-    QSize negotiatedSize() const { return m_negotiated; }
-    int negotiatedFps() const { return m_fps; }
-    // False once the capture thread has exited (device unplugged, stream error)
-    // or if start() failed.
-    bool isRunning() const { return m_running.load(); }
-    // Suppress start() failure warnings (used while retrying a known failure).
-    void setQuiet(bool quiet) { m_quiet = quiet; }
+    // A QByteArray holding `used` bytes copied from `src`. Falls back to a fresh
+    // allocation if every pooled array is still in use (never blocks).
+    QByteArray take(const char *src, size_t used)
+    {
+        for (QByteArray &b : m_pool) {
+            // isDetached(): nobody else shares this array, so overwriting is safe.
+            if (b.isDetached() && size_t(b.capacity()) >= used) {
+                b.resize(qsizetype(used)); // within capacity: no reallocation
+                std::memcpy(b.data(), src, used);
+                return b; // shared copy; the pool keeps its reference
+            }
+        }
+        return QByteArray(src, qsizetype(used));
+    }
 
 private:
-    void run();
-    QDebug warn();
-    // A QByteArray holding `used` bytes copied from `src`, recycled from a small
-    // pool: a pooled array is free again once every consumer has dropped its
-    // (implicitly shared) copy. Falls back to a fresh allocation if all are busy.
-    QByteArray takeBuffer(const char *src, size_t used);
-
-    QString m_devicePath;
-    QSize m_targetSize;
-    bool m_quiet = false;
-    QString m_discard;
-    device::PixelFormat m_format;
-    int m_stride = 0;
-    Stats *m_stats;
-    FrameQueue *m_queue = nullptr;
-
-    int m_fd = -1;
-    int m_bufferCount = 0;
-    // Capture queue (2) + decoder + widget pending + renderer + slack.
-    std::array<QByteArray, 8> m_pool;
-    struct Buffer {
-        void *start = nullptr;
-        size_t length = 0;
-    } m_buffers[4];
-
-    QSize m_negotiated;
-    int m_fps = 0;
-    std::atomic<bool> m_running{false};
-    std::atomic<bool> m_stop{false};
-    std::thread m_thread;
+    std::array<QByteArray, kCount> m_pool;
 };
