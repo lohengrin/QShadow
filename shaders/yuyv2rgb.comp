@@ -1,0 +1,35 @@
+#version 450
+
+// Packed YUYV (YUY2, 4:2:2) -> RGBA8, one invocation per output pixel. The
+// frame is uploaded as an RGBA8 texture half as wide as the image, so one texel
+// carries two pixels: (Y0, Cb, Y1, Cr). Chroma is shared by the pixel pair
+// (nearest), the same as the CPU path.
+//
+// The ShadowCast reports YUYV as BT.601 limited range (Y 16..235, CbCr 16..240).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Bindings 0 and 3 only, so this shares the planar converter's descriptor set
+// layout (bindings 1 and 2 are simply unused here).
+layout(set = 0, binding = 0) uniform sampler2D uPacked;
+layout(set = 0, binding = 3, rgba8) uniform writeonly image2D uOut;
+
+void main()
+{
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(uOut);
+    if (p.x >= size.x || p.y >= size.y)
+        return;
+
+    const vec4 t = texelFetch(uPacked, ivec2(p.x >> 1, p.y), 0);
+    const float y = ((p.x & 1) == 0) ? t.r : t.b;
+
+    const float yy = 1.16438356 * (y - 16.0 / 255.0);
+    const float cb = t.g - 128.0 / 255.0;
+    const float cr = t.a - 128.0 / 255.0;
+
+    const vec3 rgb = vec3(yy + 1.59602679 * cr,
+                          yy - 0.39176229 * cb - 0.81296765 * cr,
+                          yy + 2.01723214 * cb);
+    imageStore(uOut, p, vec4(clamp(rgb, 0.0, 1.0), 1.0));
+}

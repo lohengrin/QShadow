@@ -58,7 +58,7 @@ private:
     int m_prefFormat = int(device::PixelFormat::Mjpg);
     QSize m_prefSize;
     bool m_captureFailing = false; // log a persistent start failure only once
-    QHash<int, QList<QSize>> m_sizes; // keyed by device::PixelFormat
+    QHash<int, QList<device::Mode>> m_sizes; // keyed by device::PixelFormat
     int m_audioCard = -1;
 
     QVulkanInstance *m_vulkanInstance = nullptr;

@@ -93,13 +93,42 @@ uint32_t toFourcc(PixelFormat format)
     return format == PixelFormat::Yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
 }
 
-QList<QSize> enumerateSizes(const QString &devicePath, PixelFormat format)
+namespace {
+
+// Highest frame rate for one frame size on an already open device.
+int maxFps(int fd, uint32_t fourcc, const QSize &size)
 {
+    struct v4l2_frmivalenum fiv;
+    std::memset(&fiv, 0, sizeof(fiv));
+    fiv.pixel_format = fourcc;
+    fiv.width = uint32_t(size.width());
+    fiv.height = uint32_t(size.height());
+
+    double bestUs = 0.0;
+    bool any = false;
+    while (ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &fiv) == 0) {
+        if (fiv.type == V4L2_FRMIVAL_TYPE_DISCRETE && fiv.discrete.denominator > 0) {
+            const double us = double(fiv.discrete.numerator) * 1e6
+                              / double(fiv.discrete.denominator);
+            if (!any || us < bestUs) {
+                bestUs = us;
+                any = true;
+            }
+        }
+        ++fiv.index;
+    }
+    return any ? int(1e6 / bestUs + 0.5) : 0;
+}
+
+} // namespace
+
+QList<Mode> enumerateModes(const QString &devicePath, PixelFormat format)
+{
+    QList<Mode> modes;
     const uint32_t fourcc = toFourcc(format);
-    QList<QSize> sizes;
     const int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDWR | O_NONBLOCK);
     if (fd < 0)
-        return sizes;
+        return modes;
 
     // Confirm the format is offered.
     struct v4l2_fmtdesc fmt;
@@ -113,9 +142,10 @@ QList<QSize> enumerateSizes(const QString &devicePath, PixelFormat format)
     }
     if (!offered) {
         close(fd);
-        return sizes;
+        return modes;
     }
 
+    QList<QSize> sizes;
     struct v4l2_frmsizeenum fsize;
     std::memset(&fsize, 0, sizeof(fsize));
     fsize.pixel_format = fourcc;
@@ -137,44 +167,40 @@ QList<QSize> enumerateSizes(const QString &devicePath, PixelFormat format)
         }
         ++fsize.index;
     }
-    close(fd);
 
     std::sort(sizes.begin(), sizes.end(), [](const QSize &a, const QSize &b) {
         return a.width() * a.height() > b.width() * b.height();
     });
     sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
-    return sizes;
+
+    for (const QSize &size : std::as_const(sizes))
+        modes.append(Mode{size, maxFps(fd, fourcc, size)});
+    close(fd);
+    return modes;
 }
 
-int maxFpsForSize(const QString &devicePath, const QSize &size, PixelFormat format)
+int findShadowCastAudioCard()
 {
-    const int fd = ::open(devicePath.toLocal8Bit().constData(), O_RDWR | O_NONBLOCK);
-    if (fd < 0)
-        return 0;
+    constexpr int kVendor = 0x298f;
+    constexpr int kProduct = 0x1996;
 
-    struct v4l2_frmivalenum fiv;
-    std::memset(&fiv, 0, sizeof(fiv));
-    fiv.pixel_format = toFourcc(format);
-    fiv.width = uint32_t(size.width());
-    fiv.height = uint32_t(size.height());
-
-    double bestUs = 0.0; // largest interval = lowest rate; track intervention instead
-    bool any = false;
-    while (ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &fiv) == 0) {
-        if (fiv.type == V4L2_FRMIVAL_TYPE_DISCRETE && fiv.discrete.denominator > 0) {
-            const double us = double(fiv.discrete.numerator) * 1e6
-                              / double(fiv.discrete.denominator);
-            if (!any || us < bestUs) {
-                bestUs = us;
-                any = true;
-            }
-        }
-        ++fiv.index;
+    // /sys/class/sound/cardN -> .../usbX/.../sound/cardN ; walk up to the USB
+    // device node carrying the vendor/product IDs.
+    QDir root(QStringLiteral("/sys/class/sound"));
+    const QStringList entries = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &entry : entries) {
+        if (!entry.startsWith(QLatin1String("card")))
+            continue;
+        bool ok = false;
+        const int index = entry.mid(4).toInt(&ok);
+        if (!ok)
+            continue; // not a bare cardN node
+        const QString resolved = QFileInfo(root.filePath(entry)).symLinkTarget();
+        if (resolved.startsWith(QStringLiteral("/sys/devices"))
+            && usbVidPidOnPath(resolved, kVendor, kProduct))
+            return index;
     }
-    close(fd);
-    if (!any)
-        return 0;
-    return int(1e6 / bestUs + 0.5);
+    return -1;
 }
 
 } // namespace device

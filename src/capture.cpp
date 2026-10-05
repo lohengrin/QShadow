@@ -6,6 +6,7 @@
 #include <sys/poll.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstring>
 
 #include <chrono>
@@ -52,6 +53,19 @@ Capture::~Capture()
 {
     stop();
     join();
+}
+
+QByteArray Capture::takeBuffer(const char *src, size_t used)
+{
+    for (QByteArray &b : m_pool) {
+        // isDetached(): nobody else shares this array, so overwriting is safe.
+        if (b.isDetached() && size_t(b.capacity()) >= used) {
+            b.resize(qsizetype(used)); // within capacity: no reallocation
+            std::memcpy(b.data(), src, used);
+            return b; // shared copy; the pool keeps its reference
+        }
+    }
+    return QByteArray(src, qsizetype(used));
 }
 
 QDebug Capture::warn()
@@ -178,6 +192,16 @@ bool Capture::start(FrameQueue *out)
         }
     }
 
+    {
+        size_t largest = 0;
+        for (int i = 0; i < m_bufferCount; ++i)
+            largest = std::max(largest, m_buffers[i].length);
+        for (QByteArray &b : m_pool) {
+            b = QByteArray();
+            b.reserve(qsizetype(largest));
+        }
+    }
+
     if (xioctl(m_fd, VIDIOC_STREAMON, &fmt.type) < 0) {
         warn() << "Capture: VIDIOC_STREAMON failed:" << strerror(errno);
         return false;
@@ -258,8 +282,7 @@ void Capture::run()
             frame.width = m_negotiated.width();
             frame.height = m_negotiated.height();
             frame.stride = m_stride;
-            frame.data = QByteArray(src, int(m_format == device::PixelFormat::Yuyv
-                                                 ? rawSize : used));
+            frame.data = takeBuffer(src, m_format == device::PixelFormat::Yuyv ? rawSize : used);
             m_stats->captured.fetch_add(1);
             m_queue->push(std::move(frame));
         }

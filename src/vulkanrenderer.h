@@ -118,6 +118,11 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     // Planar YUV frame: upload the three planes, then convert to RGBA into
     // m_frame with a compute pass so everything downstream is unchanged.
     void uploadYuvFrame(const VideoFrame &frame, PerSwap *slot, VkCommandBuffer cb);
+    // Packed YUYV frame: upload as a half-width RGBA8 texture and convert.
+    void uploadYuyvFrame(const VideoFrame &frame, PerSwap *slot, VkCommandBuffer cb);
+    // Shared tail of both: run `pipe` over the sampled planes (descriptors for
+    // bindings 0..2 are written by the caller) into m_frame.
+    void convertToFrame(VkCommandBuffer cb, PerSwap *slot, VkPipeline pipe, const QSize &size);
     void updateGfxDescriptors(VkDescriptorSet set, VkImageView srcView, VkSampler srcSampler);
     void updateCompDescriptors(VkDescriptorSet compSet, VkBuffer ubo, VkImageView inputView,
                                VkImageView outputView);
@@ -154,9 +159,12 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VkDescriptorSetLayout m_yuvSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_yuvPipeLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeYuv = VK_NULL_HANDLE;
+    VkPipeline m_pipeYuyv = VK_NULL_HANDLE;
     bool m_yuvOk = false;
     ImageObj m_yuv[3];       // Y, Cb, Cr (R8_UNORM)
     QSize m_yuvSize[3];
+    ImageObj m_yuyv;         // packed YUYV as RGBA8, width / 2
+    QSize m_yuyvSize;
 
     std::vector<PerSwap> m_perSwap;
 
@@ -172,4 +180,8 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     ImageObj m_fsrA;
     ImageObj m_fsrB;
     QSize m_fsrSize;
+
+    // CRT-Geom stretch factors for m_crtAspect (recomputed only when it changes).
+    float m_crtAspect = -1.0f;
+    float m_crtStretch[3] = {0.0f, 0.0f, 0.0f};
 };

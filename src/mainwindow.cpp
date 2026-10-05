@@ -233,9 +233,9 @@ bool MainWindow::connectDevice()
         return false;
     }
 
-    QHash<int, QList<QSize>> sizes;
+    QHash<int, QList<device::Mode>> sizes;
     for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
-        const QList<QSize> list = device::enumerateSizes(path, format);
+        const QList<device::Mode> list = device::enumerateModes(path, format);
         if (!list.isEmpty())
             sizes.insert(int(format), list);
     }
@@ -275,10 +275,10 @@ void MainWindow::populateResolutions(const QSize &preferred)
     const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
     const QSignalBlocker blocker(m_resCombo);
     m_resCombo->clear();
-    for (const QSize &s : m_sizes.value(int(format))) {
-        const int fps = device::maxFpsForSize(m_devicePath, s, format);
-        m_resCombo->addItem(
-            QStringLiteral("%1x%2 @ %3 fps").arg(s.width()).arg(s.height()).arg(fps), s);
+    for (const device::Mode &mode : m_sizes.value(int(format))) {
+        m_resCombo->addItem(QStringLiteral("%1x%2 @ %3 fps")
+                                .arg(mode.size.width()).arg(mode.size.height()).arg(mode.fps),
+                            mode.size);
     }
     const int idx = m_resCombo->findData(preferred);
     if (idx >= 0)

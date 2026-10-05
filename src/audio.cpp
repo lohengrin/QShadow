@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "audiodrift.h"
+#include "device.h"
 
 #include <QAudio>
 #include <QAudioDevice>
@@ -30,6 +31,12 @@ constexpr double kTargetRingFrames = 8.0 * 48.0; // 8 ms
 
 int findShadowCastAudioCard()
 {
+    // Identify the card by the USB IDs, like the video node; fall back to the
+    // ALSA card name only if sysfs does not give an answer.
+    const int byUsb = device::findShadowCastAudioCard();
+    if (byUsb >= 0)
+        return byUsb;
+
     int card = -1;
     while (snd_card_next(&card) == 0 && card >= 0) {
         char *name = nullptr;

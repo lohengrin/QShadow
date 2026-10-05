@@ -13,7 +13,8 @@ host with minimal latency.
   to RGBA on the GPU (falls back to CPU RGBA decode for non-YCbCr JPEGs or if
   the GPU path is unavailable; `QSHADOW_CPU_CONVERT=1` forces the fallback), or
   uncompressed YUYV (BT.601
-  limited range, CPU-converted to RGBA in the decoder thread; artifact-free but
+  limited range; the capture buffer is passed to the GPU untouched and converted
+  by `shaders/yuyv2rgb.comp`, or on the CPU as fallback; artifact-free but
   USB 2.0 limits it to ≤720x480@30 / 720x576@25 / 800x600@20 / 1280x720@10)
   → Vulkan (QVulkanWindow) display,
   auto-adapts to the source's active resolution/rate and preserves aspect ratio.
@@ -50,7 +51,17 @@ Run:
 
 ## Testing
 
-No automated test framework. Smoke checks use system tools:
+Unit tests (Qt Test, run by ctest; no dongle, GPU or display needed) cover the
+audio ring / drift control, the decoder (MJPG planar vs RGBA, YUYV, corrupt
+frames, frame-pool recycling), the frame queue and the sizing helpers:
+
+```
+cmake --build build -j && ctest --test-dir build --output-on-failure
+```
+
+Everything except `main()` is in the `qshadow_core` static library so tests link
+the real code. Disable with `-DQSHADOW_BUILD_TESTS=OFF`. Hardware smoke checks
+use system tools:
 
 - Video device present: `v4l2-ctl --list-devices` and `v4l2-ctl -d /dev/video0 --list-formats-ext`
 - Verify app negotiated format: `v4l2-ctl -d /dev/video0 --get-fmt-video`

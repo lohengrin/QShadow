@@ -21,11 +21,19 @@ uint32_t toFourcc(PixelFormat format);
 // present.
 QString findShadowCastDevice();
 
-// All capture sizes the device exposes for a pixel format, largest first.
-// Empty if the format is not offered.
-QList<QSize> enumerateSizes(const QString &devicePath, PixelFormat format);
+// A capture size with the highest frame rate the device offers for it.
+struct Mode {
+    QSize size;
+    int fps = 0;
+    bool operator==(const Mode &other) const { return size == other.size && fps == other.fps; }
+};
 
-// Maximum frame rate offered for the given size and format.
-int maxFpsForSize(const QString &devicePath, const QSize &size, PixelFormat format);
+// All modes the device exposes for a pixel format, largest first, read with a
+// single open of the device. Empty if the format is not offered.
+QList<Mode> enumerateModes(const QString &devicePath, PixelFormat format);
+
+// ALSA card index of the ShadowCast's USB audio interface, found by walking
+// sysfs for the USB vendor/product IDs (-1 if absent).
+int findShadowCastAudioCard();
 
 } // namespace device

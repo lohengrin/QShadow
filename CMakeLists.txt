@@ -36,6 +36,7 @@ set(QSHADOW_SHADERS
   fsr_easu.comp
   fsr_rcas.comp
   yuv2rgb.comp
+  yuyv2rgb.comp
 )
 
 set(QSHADOW_SPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/spv")
@@ -99,18 +100,31 @@ endforeach()
 
 # ---------------------------------------------------------------------------
 # Application
+#
+# Everything except main() lives in a static library so the tests link the very
+# same code. Qt resources (the SPIR-V shaders) belong to the executable.
 # ---------------------------------------------------------------------------
-qt_add_executable(qshadow
-  resources.qrc
-  src/main.cpp
+add_library(qshadow_core STATIC
   src/device.h src/device.cpp
   src/capture.h src/capture.cpp
   src/decoder.h src/decoder.cpp
+  src/videoframe.h
   src/videowidget.h src/videowidget.cpp
   src/vulkanrenderer.h src/vulkanrenderer.cpp
   src/fsrconsts.h
   src/audio.h src/audio.cpp src/audiodrift.h
   src/mainwindow.h src/mainwindow.cpp
+)
+target_include_directories(qshadow_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(qshadow_core PUBLIC
+  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia
+  ALSA::ALSA JPEG::JPEG Threads::Threads Vulkan::Vulkan
+)
+target_compile_options(qshadow_core PUBLIC -Wall -Wextra)
+
+qt_add_executable(qshadow
+  resources.qrc
+  src/main.cpp
 )
 
 qt_add_resources(qshadow qshadow_spv
@@ -122,9 +136,27 @@ if(QSHADOW_SPV_COMPILED)
   add_dependencies(qshadow qshadow_shaders_spv)
 endif()
 
-target_link_libraries(qshadow PRIVATE
-  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia
-  ALSA::ALSA JPEG::JPEG Threads::Threads Vulkan::Vulkan
-)
+target_link_libraries(qshadow PRIVATE qshadow_core)
 
-target_compile_options(qshadow PRIVATE -Wall -Wextra)
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+install(TARGETS qshadow RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(FILES qshadow.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+install(FILES qshadow.svg
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
+
+# ---------------------------------------------------------------------------
+# Tests (no dongle, GPU or display needed): ctest --test-dir build
+# ---------------------------------------------------------------------------
+option(QSHADOW_BUILD_TESTS "Build the unit tests (needs Qt6 Test)" ON)
+if(QSHADOW_BUILD_TESTS)
+  find_package(Qt6 QUIET COMPONENTS Test)
+  if(Qt6Test_FOUND)
+    enable_testing()
+    add_subdirectory(tests)
+  else()
+    message(STATUS "Qt6 Test not found; skipping unit tests")
+  endif()
+endif()
