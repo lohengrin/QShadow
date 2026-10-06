@@ -15,6 +15,8 @@
 //
 // The GUI thread only ever stores the newest decoded frame (drop-on-
 // backpressure), exactly like the previous OpenGL widget did.
+class QMouseEvent;
+
 class VideoWidget : public QVulkanWindow {
     Q_OBJECT
 public:
@@ -72,6 +74,13 @@ public:
     // user has not forced the CPU path with QSHADOW_CPU_CONVERT=1). Thread-safe.
     bool gpuYuvSupported() const;
     void setGpuYuvSupported(bool supported); // renderer only
+
+signals:
+    // Right click on the video, at this global screen position.
+    void contextMenuRequested(const QPoint &globalPos);
+
+protected:
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 public slots:
     void setPreserveAspect(bool on);

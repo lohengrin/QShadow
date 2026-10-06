@@ -2,6 +2,8 @@
 
 #include "vulkanrenderer.h"
 
+#include <QMouseEvent>
+
 #include <algorithm>
 
 VideoWidget::VideoWidget(QWindow *parent)
@@ -37,6 +39,16 @@ void VideoWidget::submitFrame(const VideoFramePtr &frame,
             },
             Qt::QueuedConnection);
     }
+}
+
+void VideoWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    // The video is a native window inside the main window, so the widget layer
+    // never sees its mouse events: forward the right click.
+    if (event->button() == Qt::RightButton)
+        emit contextMenuRequested(event->globalPosition().toPoint());
+    else
+        QVulkanWindow::mouseReleaseEvent(event);
 }
 
 bool VideoWidget::gpuYuvSupported() const

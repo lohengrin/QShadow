@@ -17,6 +17,8 @@
 
 class QCheckBox;
 class QCloseEvent;
+class QEvent;
+class QToolBar;
 class QLabel;
 class QSlider;
 class QVulkanInstance;
@@ -29,6 +31,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    // Fullscreen hides the toolbar and status bar however it was entered/left.
+    void changeEvent(QEvent *event) override;
 
 private slots:
     void checkDevice();
@@ -37,6 +41,7 @@ private slots:
     void updateStatus();
     void toggleFullscreen();
     void fitToPipeline();
+    void showContextMenu(const QPoint &globalPos);
 
 private:
     void buildUi();
@@ -66,6 +71,7 @@ private:
 
     QVulkanInstance *m_vulkanInstance = nullptr;
     VideoWidget *m_video = nullptr;
+    QToolBar *m_toolbar = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
     QComboBox *m_formatCombo = nullptr;
