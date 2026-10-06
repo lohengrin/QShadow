@@ -2,8 +2,14 @@
 
 #include <QApplication>
 #include <QByteArrayList>
+#include <QLoggingCategory>
 #include <QMessageBox>
 #include <QVulkanInstance>
+
+#ifdef Q_OS_WIN
+#include <cstdio>
+#include <windows.h>
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -12,6 +18,24 @@ int main(int argc, char *argv[])
     // is available so we never touch the X11 stack.
     if (!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
         qputenv("QT_QPA_PLATFORM", "wayland");
+#endif
+#ifdef Q_OS_WIN
+    // A GUI-subsystem executable has no console; reattach the parent's (unless
+    // stderr is already redirected) so that QSHADOW_STATS and warnings show up
+    // when started from a terminal.
+    const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+    if ((!err || err == INVALID_HANDLE_VALUE) && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE *unused = nullptr;
+        freopen_s(&unused, "CONOUT$", "w", stderr);
+        freopen_s(&unused, "CONOUT$", "w", stdout);
+    }
+    // Qt's default handler only reaches the debugger for a GUI-subsystem exe.
+    qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &context, const QString &msg) {
+        const QByteArray line = qFormatLogMessage(type, context, msg).toLocal8Bit();
+        std::fputs(line.constData(), stderr);
+        std::fputc('\n', stderr);
+        std::fflush(stderr);
+    });
 #endif
 
     QApplication app(argc, argv);

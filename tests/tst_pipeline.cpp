@@ -1,10 +1,13 @@
 #include "capture.h"
 #include "decoder.h"
 
-#include <QBuffer>
 #include <QImage>
 #include <QPainter>
 #include <QtTest>
+
+#include <cstdio>
+#include <cstdlib>
+#include <jpeglib.h>
 
 #include <algorithm>
 #include <condition_variable>
@@ -122,12 +125,33 @@ QImage testImage(int w, int h)
     return img;
 }
 
-QByteArray toJpeg(const QImage &img)
+// Encodes with libjpeg (4:2:0 like the dongle) rather than QImage::save, so the
+// test does not depend on Qt's JPEG image-format plugin being installed.
+QByteArray toJpeg(const QImage &image)
 {
-    QByteArray bytes;
-    QBuffer buffer(&bytes);
-    buffer.open(QIODevice::WriteOnly);
-    img.save(&buffer, "JPEG", 90);
+    const QImage img = image.convertToFormat(QImage::Format_RGB888);
+    jpeg_compress_struct cinfo;
+    jpeg_error_mgr jerr;
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+    unsigned char *out = nullptr;
+    unsigned long outSize = 0;
+    jpeg_mem_dest(&cinfo, &out, &outSize);
+    cinfo.image_width = JDIMENSION(img.width());
+    cinfo.image_height = JDIMENSION(img.height());
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, 90, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row = const_cast<JSAMPLE *>(img.constScanLine(int(cinfo.next_scanline)));
+        jpeg_write_scanlines(&cinfo, &row, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    const QByteArray bytes(reinterpret_cast<const char *>(out), qsizetype(outSize));
+    jpeg_destroy_compress(&cinfo);
+    free(out);
     return bytes;
 }
 

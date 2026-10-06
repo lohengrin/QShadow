@@ -5,7 +5,7 @@
 // these interfaces; each platform backend (src/platform/<os>/) implements them:
 //
 //   Linux:   V4L2 video + ALSA audio, found through sysfs
-//   Windows: (planned) Media Foundation video + WASAPI/Qt audio
+//   Windows: Media Foundation video + WASAPI audio, found by USB ID in the device path
 //
 // Device identifiers are opaque strings owned by the backend (a /dev node, a
 // Media Foundation symbolic link, ...); the application only stores and passes
