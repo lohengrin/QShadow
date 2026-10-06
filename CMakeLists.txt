@@ -162,6 +162,10 @@ qt_add_executable(qshadow WIN32
   resources.qrc
   src/main.cpp
 )
+if(WIN32)
+  # Explorer / taskbar icon embedded in the exe.
+  target_sources(qshadow PRIVATE icons/qshadow.rc)
+endif()
 
 qt_add_resources(qshadow qshadow_spv
   PREFIX "/"

@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file>shaders/hq4x.png</file>
+        <file alias="icons/qshadow.png">icons/qshadow.png</file>
     </qresource>
 </RCC>
