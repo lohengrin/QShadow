@@ -5,11 +5,13 @@
 #include "platform/platform.h"
 #include "videowidget.h"
 
+#include <QActionGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -18,6 +20,7 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QVulkanInstance>
+#include <QWidgetAction>
 #include <QWidget>
 
 #include <chrono>
@@ -64,6 +67,7 @@ void MainWindow::buildUi()
     layout->setSpacing(0);
 
     auto *toolbar = new QToolBar(this);
+    m_toolbar = toolbar;
     toolbar->setMovable(false);
 
     m_aspectCheck = new QCheckBox(QStringLiteral("Preserve aspect"), toolbar);
@@ -142,6 +146,8 @@ void MainWindow::buildUi()
     m_fullscreenAction->setShortcut(QKeySequence(Qt::Key_F11));
     toolbar->addAction(m_fullscreenAction);
     m_fullscreenAction->setPriority(QAction::LowPriority);
+    // Also owned by the window itself so F11 keeps working with the toolbar hidden.
+    addAction(m_fullscreenAction);
     layout->addWidget(toolbar);
 
     m_video = new VideoWidget();
@@ -179,6 +185,7 @@ void MainWindow::buildUi()
             });
     connect(m_fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
     connect(m_fitAction, &QAction::triggered, this, &MainWindow::fitToPipeline);
+    connect(m_video, &VideoWidget::contextMenuRequested, this, &MainWindow::showContextMenu);
 
     // Esc leaves fullscreen.
     auto *escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
@@ -195,8 +202,82 @@ void MainWindow::toggleFullscreen()
         showNormal();
     else
         showFullScreen();
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() != QEvent::WindowStateChange || !m_toolbar)
+        return;
+    // Real fullscreen: nothing but the video.
+    const bool full = isFullScreen();
+    m_toolbar->setVisible(!full);
+    statusBar()->setVisible(!full);
     QSignalBlocker blocker(m_fullscreenAction);
-    m_fullscreenAction->setChecked(isFullScreen());
+    m_fullscreenAction->setChecked(full);
+}
+
+// Right-click menu with every toolbar option. It is built from the toolbar's
+// own controls when opened, so both always agree and share the same handlers.
+void MainWindow::showContextMenu(const QPoint &globalPos)
+{
+    QMenu menu(this);
+
+    auto *aspect = menu.addAction(QStringLiteral("Preserve aspect"));
+    aspect->setCheckable(true);
+    aspect->setChecked(m_aspectCheck->isChecked());
+    connect(aspect, &QAction::triggered, m_aspectCheck, &QCheckBox::setChecked);
+
+    // One radio-style submenu per combo box; choosing an entry acts exactly
+    // like picking it in the toolbar.
+    const auto comboMenu = [&](const QString &title, QComboBox *combo) {
+        QMenu *sub = menu.addMenu(title);
+        sub->setEnabled(combo->count() > 0);
+        auto *group = new QActionGroup(sub);
+        for (int i = 0; i < combo->count(); ++i) {
+            QAction *a = sub->addAction(combo->itemText(i));
+            a->setCheckable(true);
+            a->setChecked(i == combo->currentIndex());
+            group->addAction(a);
+            connect(a, &QAction::triggered, this, [combo, i] {
+                combo->setCurrentIndex(i);
+                emit combo->activated(i);
+            });
+        }
+    };
+    comboMenu(QStringLiteral("Format"), m_formatCombo);
+    comboMenu(QStringLiteral("Resolution"), m_resCombo);
+    comboMenu(QStringLiteral("Shader"), m_shaderCombo);
+    comboMenu(QStringLiteral("Downscale"), m_downscaleCombo);
+
+    QMenu *volume = menu.addMenu(QStringLiteral("Volume"));
+    auto *holder = new QWidget(volume);
+    auto *row = new QHBoxLayout(holder);
+    auto *slider = new QSlider(Qt::Horizontal, holder);
+    slider->setRange(m_volumeSlider->minimum(), m_volumeSlider->maximum());
+    slider->setValue(m_volumeSlider->value());
+    slider->setFixedWidth(160);
+    auto *value = new QLabel(QString::number(slider->value()), holder);
+    value->setMinimumWidth(28);
+    row->addWidget(slider);
+    row->addWidget(value);
+    connect(slider, &QSlider::valueChanged, m_volumeSlider, &QSlider::setValue);
+    connect(slider, &QSlider::valueChanged, value,
+            [value](int v) { value->setText(QString::number(v)); });
+    auto *sliderAction = new QWidgetAction(volume);
+    sliderAction->setDefaultWidget(holder);
+    volume->addAction(sliderAction);
+
+    menu.addSeparator();
+    QAction *fit = menu.addAction(QStringLiteral("Fit window to video"));
+    fit->setEnabled(!isFullScreen());
+    connect(fit, &QAction::triggered, this, &MainWindow::fitToPipeline);
+    QAction *full = menu.addAction(QStringLiteral("Fullscreen	F11"));
+    full->setCheckable(true);
+    full->setChecked(isFullScreen());
+    connect(full, &QAction::triggered, this, &MainWindow::toggleFullscreen);
+
+    menu.exec(globalPos);
 }
 
 void MainWindow::fitToPipeline()
