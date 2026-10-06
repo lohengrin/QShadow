@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QByteArrayList>
 #include <QLoggingCategory>
 #include <QMessageBox>
@@ -41,6 +42,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("qshadow"));
     QApplication::setOrganizationName(QStringLiteral("QShadow"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/qshadow.png")));
 
     QVulkanInstance instance;
     if (!qEnvironmentVariableIsEmpty("QSHADOW_VULKAN_VALIDATION")) {
