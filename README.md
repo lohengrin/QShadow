@@ -1,7 +1,7 @@
 # QShadow
 
 Minimal-latency viewer for the **GENKI ShadowCast** USB capture dongle
-(`298f:1996`) on Linux (Wayland).
+(`298f:1996`) on Linux (Wayland) and Windows 10/11.
 
 QShadow grabs the HDMI input of a ShadowCast, shows it in a window, and plays
 its audio through your computer's speakers — with as little added delay as
@@ -47,7 +47,7 @@ possible.
 
 ## Requirements
 
-- Linux with a **Wayland** session
+- Linux with a **Wayland** session, or Windows 10/11 (x64)
 - Qt 6 (`Core`, `Gui`, `Widgets`, `Multimedia`)
 - Vulkan loader and headers (`libvulkan-dev`) with a Vulkan 1.1-capable GPU
   driver (Mesa RADV/ANV/llvmpipe, Intel, NVIDIA, …)
@@ -67,7 +67,26 @@ sudo apt install qt6-multimedia-dev libjpeg-turbo8-dev libasound2-dev \
                  libdrm-dev libgbm-dev
 ```
 
-## Build
+## Build (Windows)
+
+Needs Visual Studio 2022/2026 (C++ workload), CMake and
+[vcpkg](https://github.com/microsoft/vcpkg). All other dependencies (Qt 6,
+libjpeg-turbo, Vulkan, glslang) come from the `vcpkg.json` manifest; the first
+configure builds Qt, which takes a while (binary caching makes later ones fast).
+
+```
+set VCPKG_ROOT=C:\Dev\vcpkg
+cmake --preset windows
+cmake --build --preset windows-release
+ctest --preset windows-release
+build-windows\Release\qshadow.exe
+```
+
+Video uses Media Foundation (native MJPG/YUY2 passthrough, no converters) and
+audio uses WASAPI shared mode at the smallest engine period the driver
+allows. A Vulkan-capable GPU driver is needed; the Vulkan SDK is not.
+
+## Build (Linux)
 
 From the project root:
 

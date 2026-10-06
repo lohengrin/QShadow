@@ -1,2 +1,4 @@
 build/
 *.user
+build-windows/
+vcpkg_installed/

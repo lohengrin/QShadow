@@ -45,6 +45,8 @@ if(QSHADOW_SHADER_COMPILE)
   find_program(QSHADOW_SHADER_COMPILER
     NAMES glslc glslangValidator
     HINTS
+      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/glslang"
+      "$ENV{VULKAN_SDK}/Bin"
       "$ENV{ANDROID_NDK_HOME}/shader-tools/linux-x86_64"
       "$ENV{ANDROID_HOME}/emulator/lib64/vulkan"
       "$ENV{ANDROID_SDK_ROOT}/emulator/lib64/vulkan")
@@ -116,6 +118,15 @@ if(UNIX AND NOT APPLE)
     src/platform/linux/alsa_audio.h src/platform/linux/alsa_audio.cpp
   )
   set(QSHADOW_PLATFORM_LIBS ALSA::ALSA)
+elseif(WIN32)
+  set(QSHADOW_PLATFORM_SOURCES
+    src/platform/windows/platform_windows.cpp
+    src/platform/windows/com_common.h src/platform/windows/com_common.cpp
+    src/platform/windows/mf_device.h src/platform/windows/mf_device.cpp
+    src/platform/windows/mf_capture.h src/platform/windows/mf_capture.cpp
+    src/platform/windows/wasapi_audio.h src/platform/windows/wasapi_audio.cpp
+  )
+  set(QSHADOW_PLATFORM_LIBS mfplat mf mfreadwrite mfuuid ole32 oleaut32 propsys avrt strmiids)
 else()
   message(FATAL_ERROR "QShadow has no capture backend for this platform yet "
                       "(see src/platform/platform.h for the interfaces to implement)")
@@ -147,7 +158,7 @@ else()
   target_compile_options(qshadow_core PUBLIC -Wall -Wextra)
 endif()
 
-qt_add_executable(qshadow
+qt_add_executable(qshadow WIN32
   resources.qrc
   src/main.cpp
 )
@@ -163,11 +174,30 @@ endif()
 
 target_link_libraries(qshadow PRIVATE qshadow_core)
 
+# Windows: put the Qt plugins (platforms/qwindows.dll, ...) next to the exe so it
+# starts from the build tree, and ship them with the install.
+if(WIN32)
+  if(TARGET Qt6::windeployqt)
+    add_custom_command(TARGET qshadow POST_BUILD
+      COMMAND Qt6::windeployqt --no-translations --no-system-d3d-compiler --no-opengl-sw
+              --no-compiler-runtime "$<TARGET_FILE:qshadow>"
+      COMMENT "Deploying Qt runtime next to qshadow.exe")
+  else()
+    message(WARNING "Qt6::windeployqt not found; qshadow.exe will not find the Qt plugins")
+  endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 install(TARGETS qshadow RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+if(WIN32)
+  # The post-build step above left every runtime DLL (vcpkg's applocal copies
+  # the dependencies, windeployqt the Qt plugins) next to the exe: ship them all.
+  install(DIRECTORY "$<TARGET_FILE_DIR:qshadow>/" DESTINATION "${CMAKE_INSTALL_BINDIR}"
+          FILES_MATCHING PATTERN "*.dll")
+endif()
 if(UNIX AND NOT APPLE)
   install(FILES qshadow.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
   install(FILES qshadow.svg

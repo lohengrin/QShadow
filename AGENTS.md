@@ -24,7 +24,8 @@ host with minimal latency.
   ring fill near a small target, absorbing dongle/host clock drift.
 - Settings (window geometry, aspect toggle, pixel format, selected resolution, shader,
   downscale, volume) persist in `QSettings` and are restored on the next launch.
-- Platform: Linux, Wayland only. Native ALSA/V4L2, no GStreamer.
+- Platform: Linux (Wayland only; native ALSA/V4L2, no GStreamer) and Windows
+  (Media Foundation video, WASAPI audio; dependencies from vcpkg).
 - Rendering: `QVulkanWindow` + a `QVulkanWindowRenderer` (`VulkanRenderer`).
   All Vulkan resources (pipelines, images, descriptors, command recording) live
   in the renderer; `VideoWidget` only hands over the latest decoded `QImage`.
@@ -47,6 +48,15 @@ Run:
 
 ```
 ./build/qshadow
+```
+
+Windows (MSVC + vcpkg; `VCPKG_ROOT` must point at the vcpkg checkout, the
+`vcpkg.json` manifest installs Qt 6, libjpeg-turbo, Vulkan and glslang):
+
+```
+cmake --preset windows
+cmake --build --preset windows-release
+ctest --preset windows-release
 ```
 
 ## Testing
@@ -80,12 +90,14 @@ pipeline and drift control) is portable Qt/Vulkan code in `src/`.
 ```
 src/platform/platform.h        interfaces + factory functions (the seam)
 src/platform/linux/            V4L2 video, ALSA audio, sysfs USB lookup
+src/platform/windows/          Media Foundation video (async source reader),
+                               WASAPI audio (IAudioClient3 min period), USB-ID lookup
 src/audiopipeline.*            portable audio conditioning: downmix, decimate to
                                48 kHz, drift-compensated resample -> AudioRing
 src/capture.h                  Frame, FrameQueue, BufferPool (portable)
 ```
 
-To add a platform (e.g. Windows, Media Foundation): create `src/platform/<os>/`,
+To add a platform (Windows already exists, see above): create `src/platform/<os>/`,
 implement the five `platform::` functions and the two interfaces, and select it
 in `CMakeLists.txt` next to the Linux block. Rules for a backend:
 

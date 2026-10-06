@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 
 // Inline port of the constant-packing stage of AMD FidelityFX Super Resolution
@@ -29,7 +30,7 @@ struct EasuConsts {
 inline std::uint32_t f32Bits(float x)
 {
     std::uint32_t bits;
-    __builtin_memcpy(&bits, &x, sizeof(bits));
+    std::memcpy(&bits, &x, sizeof(bits));
     return bits;
 }
 
