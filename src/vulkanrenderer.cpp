@@ -1352,6 +1352,34 @@ void VulkanRenderer::endSwapPass(VkCommandBuffer cb)
 
 void VulkanRenderer::startNextFrame()
 {
+    bool drewPass = false;
+    std::optional<std::chrono::steady_clock::time_point> shownStamp;
+    recordFrame(&drewPass, &shownStamp);
+    if (!drewPass)
+        presentClearedFrame();
+
+    // QVulkanWindow needs exactly one frameReady() per startNextFrame(). Skipping
+    // it leaves the window waiting for this frame forever: it never asks for
+    // another one and the picture freezes for good. So it is called here,
+    // unconditionally, whatever recordFrame() did (including its early returns).
+    m_win->frameReady();
+    if (shownStamp)
+        m_win->noteSubmitted(*shownStamp);
+}
+
+void VulkanRenderer::presentClearedFrame()
+{
+    const QSize outSize = m_win->swapChainImageSize();
+    if (outSize.isEmpty())
+        return; // no swapchain extent to clear; frameReady() must still follow
+    VkCommandBuffer cb = m_win->currentCommandBuffer();
+    beginSwapPass(cb, outSize);
+    endSwapPass(cb);
+}
+
+void VulkanRenderer::recordFrame(bool *drewPass,
+                                 std::optional<std::chrono::steady_clock::time_point> *shownStamp)
+{
     if (!m_win->isValid() || m_perSwap.empty())
         return;
 
@@ -1518,8 +1546,8 @@ void VulkanRenderer::startNextFrame()
         endSwapPass(cb);
     }
 
-    m_win->frameReady();
+    *drewPass = true;
     if (newFrame)
-        m_win->noteSubmitted(stamp);
+        *shownStamp = stamp;
 }
 

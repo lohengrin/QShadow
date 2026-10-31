@@ -8,7 +8,9 @@
 #include <QVulkanWindowRenderer>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -136,6 +138,14 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     void recordBlit(VkCommandBuffer cb, PerSwap *slot, VkImageView srcView,
                     VkSampler sampler, const QRect &target, Program program,
                     const PushParams &pp);
+    // Records everything for one frame. It may return early at any point; the
+    // caller (startNextFrame) completes the frame either way. *drewPass is set
+    // once the swapchain pass has been recorded, *shownStamp when a newly
+    // decoded frame was drawn (for the latency readout).
+    void recordFrame(bool *drewPass,
+                     std::optional<std::chrono::steady_clock::time_point> *shownStamp);
+    // A cleared swapchain pass: leaves the image presentable when nothing was drawn.
+    void presentClearedFrame();
     void beginSwapPass(VkCommandBuffer cb, const QSize &outSize);
     void endSwapPass(VkCommandBuffer cb);
 
