@@ -7,6 +7,7 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QLayout>
 #include <QMenu>
 #include <QSlider>
 #include <QStatusBar>
@@ -39,6 +40,30 @@ private slots:
         QTRY_VERIFY(toolbar->isVisible());
         QVERIFY(w.statusBar()->isVisible());
         QVERIFY(!fullscreenAction(w)->isChecked());
+    }
+
+    // Regression: with the chrome hidden the video must not cover every pixel of the
+    // fullscreen window, or the compositor treats the window as occluded and the
+    // embedded video surface stops rendering (the image freezes on Wayland).
+    void fullscreenLeavesAStripOfTheWindowUncovered()
+    {
+        MainWindow w(nullptr);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QWidget *central = w.centralWidget();
+        QCOMPARE(central->layout()->contentsMargins().bottom(), 0);
+        QVERIFY(!central->autoFillBackground());
+
+        w.showFullScreen();
+        QTRY_VERIFY(w.isFullScreen());
+        QTRY_COMPARE(central->layout()->contentsMargins().bottom(), 1);
+        QVERIFY(central->autoFillBackground());
+        QCOMPARE(central->palette().color(QPalette::Window), QColor(Qt::black));
+
+        w.showNormal();
+        QTRY_VERIFY(!w.isFullScreen());
+        QTRY_COMPARE(central->layout()->contentsMargins().bottom(), 0);
+        QVERIFY(!central->autoFillBackground());
     }
 
     void f11AndEscapeToggleFullscreenEvenWithTheToolbarHidden()

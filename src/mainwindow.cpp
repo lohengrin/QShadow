@@ -213,6 +213,23 @@ void MainWindow::changeEvent(QEvent *event)
     const bool full = isFullScreen();
     m_toolbar->setVisible(!full);
     statusBar()->setVisible(!full);
+
+    // Never let the video cover the whole window. On Wayland (seen with GNOME's
+    // compositor) a video surface that covers every pixel of the fullscreen
+    // window makes the window count as fully occluded: the embedded
+    // QVulkanWindow loses its exposure, Qt stops rendering and the picture
+    // freezes. Resizing the video is fine, only total coverage is not, so keep
+    // one pixel row of the window's own (black) background uncovered.
+    QWidget *central = centralWidget();
+    central->layout()->setContentsMargins(0, 0, 0, full ? 1 : 0);
+    if (full) {
+        QPalette black;
+        black.setColor(QPalette::Window, Qt::black);
+        central->setPalette(black);
+    } else {
+        central->setPalette(QPalette());
+    }
+    central->setAutoFillBackground(full);
     QSignalBlocker blocker(m_fullscreenAction);
     m_fullscreenAction->setChecked(full);
 }
