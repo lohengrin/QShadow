@@ -607,7 +607,7 @@ void MainWindow::updateStatus()
                                                        : QString()));
 
     m_statsLabel->setText(QStringLiteral("cap %1 fps  dec %2 fps  dropped %3  decode %4 ms  "
-                                         "latency %5 ms  audio buf %6 ms (%7 ppm)  underruns %8")
+                                         "latency %5 ms  audio buf %6 ms (%7 ppm)  underruns %8  capture xruns %9")
                               .arg(fpsCap, 0, 'f', 1)
                               .arg(fpsDec, 0, 'f', 1)
                               .arg(drops)
@@ -616,7 +616,8 @@ void MainWindow::updateStatus()
                               .arg(double(m_ring.depthBytes()) / double(AudioRing::kBytesPerMs),
                                    0, 'f', 0)
                               .arg(m_audio ? m_audio->driftPpm() : 0)
-                              .arg(m_ring.underruns()));
+                              .arg(m_ring.underruns())
+                              .arg(m_audio ? m_audio->captureXruns() : 0));
 
     static const bool printStats = !qEnvironmentVariableIsEmpty("QSHADOW_STATS");
     if (printStats)

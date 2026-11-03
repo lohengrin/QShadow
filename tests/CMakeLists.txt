@@ -12,3 +12,8 @@ qshadow_add_test(tst_pipeline)
 qshadow_add_test(tst_sizing)
 qshadow_add_test(tst_platform)
 qshadow_add_test(tst_mainwindow)
+
+# The ALSA capture loop's recovery logic (Linux backend; uses a fake PCM, no ALSA).
+if(UNIX AND NOT APPLE)
+  qshadow_add_test(tst_alsa_loop)
+endif()
