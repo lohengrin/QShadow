@@ -1,5 +1,6 @@
 #include "alsa_audio.h"
 
+#include "alsa_capture_loop.h"
 #include "sysfs_usb.h"
 
 #include <alsa/asoundlib.h>
@@ -7,13 +8,17 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
 
 constexpr int kCaptureRate = 96000;
 constexpr snd_pcm_uframes_t kPeriodFrames = 480; // 5 ms @ 96 kHz
-constexpr snd_pcm_uframes_t kBufferFrames = kPeriodFrames * 4; // 20 ms
+// The hardware buffer only has to survive a late read; it adds no latency because
+// every period is read as soon as it is ready. 80 ms (it was 20 ms) makes an
+// overrun, which loses data, far less likely when the machine is busy.
+constexpr snd_pcm_uframes_t kBufferFrames = kPeriodFrames * 16;
 
 } // namespace
 
@@ -94,8 +99,9 @@ bool AlsaAudioInput::start()
         return false;
     }
 
-    snd_pcm_start(handle);
+    // The stream is started by the read loop (it starts any stopped stream).
     m_stats->audioUnderruns.store(0);
+    m_xruns = 0;
     m_thread = std::thread([this] { run(); });
     return true;
 }
@@ -121,33 +127,20 @@ void AlsaAudioInput::run()
 {
     auto *handle = static_cast<snd_pcm_t *>(m_handle);
 
-    std::vector<int16_t> input(kPeriodFrames);
+    alsaloop::Pcm pcm;
+    pcm.wait = [handle](int ms) { return snd_pcm_wait(handle, ms); };
+    pcm.read = [handle](int16_t *buf, size_t frames) {
+        return long(snd_pcm_readi(handle, buf, snd_pcm_uframes_t(frames)));
+    };
+    pcm.recover = [handle](int err) { return snd_pcm_recover(handle, err, 1); };
+    pcm.stopped = [handle] { return snd_pcm_state(handle) == SND_PCM_STATE_PREPARED; };
+    pcm.start = [handle] { return snd_pcm_start(handle); };
 
-    while (!m_stop.load()) {
-        const int wr = snd_pcm_wait(handle, 100);
-        if (wr == 0)
-            continue;
-        if (wr < 0) {
-            int err = snd_pcm_recover(handle, wr, 1);
-            if (err < 0) {
-                m_error = QStringLiteral("snd_pcm_recover: %1").arg(snd_strerror(err));
-                break;
-            }
-            continue;
-        }
-
-        const snd_pcm_sframes_t n = snd_pcm_readi(handle, input.data(), kPeriodFrames);
-        if (n < 0) {
-            int err = snd_pcm_recover(handle, int(n), 1);
-            if (err < 0) {
-                m_error = QStringLiteral("snd_pcm_readi: %1").arg(snd_strerror(err));
-                break;
-            }
-            continue;
-        }
-        if (n == 0)
-            continue;
-
-        m_pipeline.process(input.data(), size_t(n));
-    }
+    std::string error;
+    const bool ok = alsaloop::run(
+        pcm, kPeriodFrames, m_stop,
+        [this](const int16_t *frames, size_t n) { m_pipeline.process(frames, n); }, &m_xruns,
+        &error);
+    if (!ok)
+        m_error = QString::fromStdString(error);
 }

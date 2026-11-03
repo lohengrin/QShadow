@@ -29,6 +29,7 @@ public:
     void join() override;
     QString errorMessage() const override { return m_error; }
     int driftPpm() const override { return m_pipeline.driftPpm(); }
+    uint64_t captureXruns() const override { return m_xruns.load(std::memory_order_relaxed); }
 
 private:
     void run();
@@ -39,6 +40,7 @@ private:
     AudioPipeline m_pipeline;
     void *m_handle = nullptr;
     QString m_error;
+    std::atomic<uint64_t> m_xruns{0};
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
 };

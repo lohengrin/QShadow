@@ -55,6 +55,9 @@ public:
     virtual QString errorMessage() const = 0;
     // Current drift correction on the resampling ratio, in ppm.
     virtual int driftPpm() const = 0;
+    // Capture-side overruns recovered from so far (data the dongle produced that
+    // was not read in time). Backends that cannot tell report 0.
+    virtual uint64_t captureXruns() const { return 0; }
 };
 
 namespace platform {
