@@ -11,19 +11,58 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-ci",
+      "displayName": "Windows CI (Ninja + MSVC, run from a VS dev prompt)",
+      "inherits": "windows",
+      "generator": "Ninja",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/build-ci",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
-    { "name": "windows-debug", "configurePreset": "windows", "configuration": "Debug" }
+    {
+      "name": "windows-release",
+      "configurePreset": "windows",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-ci",
+      "configurePreset": "windows-ci"
+    }
   ],
   "testPresets": [
     {
       "name": "windows-release",
       "configurePreset": "windows",
       "configuration": "Release",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-ci",
+      "configurePreset": "windows-ci",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }
