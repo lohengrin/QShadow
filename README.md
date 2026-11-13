@@ -104,7 +104,7 @@ sudo cmake --install build        # binary, desktop entry and icon under /usr/lo
 
 ## Releases and CI
 
-GitHub Actions (`.github/workflows/`) builds and tests every push to `main` and
+GitHub Actions (`.github/workflows/`) builds and tests every push to `master` and
 every pull request on Linux and Windows. Pushing a tag publishes a GitHub
 Release with `qshadow-<ver>-windows-x64.zip` (portable),
 `qshadow-<ver>-linux-x86_64.AppImage`, a `tar.gz` and `SHA256SUMS`. The
