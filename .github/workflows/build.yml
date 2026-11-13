@@ -86,8 +86,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Qt from vcpkg takes a long time to build; cache the binary packages.
-      - uses: actions/cache@v4
+      # Qt from vcpkg takes ~2.5 h to build cold; cache the binary packages. Saved
+      # explicitly right after Configure (see below) so a later failing step cannot
+      # throw the build away: actions/cache alone only saves when the whole job passes.
+      - uses: actions/cache/restore@v4
         with:
           path: vcpkg-cache
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
@@ -110,11 +112,30 @@ jobs:
       - name: Configure
         run: cmake --preset windows-ci
 
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
       - name: Build
         run: cmake --build --preset windows-ci
 
       - name: Test
+        env:
+          QTEST_FUNCTION_TIMEOUT: "60000"   # Qt Test aborts a hung test function and names it
         run: ctest --preset windows-ci --timeout 120
+
+      - name: Diagnose test failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse build-ci/tests -Filter *.dll | Select-Object -ExpandProperty FullName
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process build-ci/tests/tst_mainwindow.exe -ArgumentList "-v2" `
+                 -RedirectStandardOutput out.txt -RedirectStandardError err.txt -PassThru -NoNewWindow
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); "tst_mainwindow still hangs" }
+          Get-Content out.txt, err.txt
 
       - name: Package zip
         run: cpack --config build-ci/CPackConfig.cmake -B dist
