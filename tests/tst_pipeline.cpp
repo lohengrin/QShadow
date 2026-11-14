@@ -1,6 +1,7 @@
 #include "capture.h"
 #include "decoder.h"
 
+#include <QBuffer>
 #include <QImage>
 #include <QPainter>
 #include <QtTest>
@@ -221,6 +222,23 @@ private slots:
         q.clear();
         Frame out;
         QVERIFY(!q.pop(&out, false, 5));
+    }
+
+    void emptyJpegMarkersAreNotFrames()
+    {
+        const char marker[4] = {char(0xff), char(0xd8), char(0xff), char(0xd9)};
+        QVERIFY(!isPlausibleJpeg(marker, sizeof(marker)));
+        QVERIFY(!isPlausibleJpeg(marker, 0));
+
+        const QImage img(64, 48, QImage::Format_RGB32);
+        QByteArray jpeg;
+        QBuffer buf(&jpeg);
+        buf.open(QIODevice::WriteOnly);
+        QVERIFY(img.save(&buf, "JPEG"));
+        QVERIFY(isPlausibleJpeg(jpeg.constData(), size_t(jpeg.size())));
+
+        QByteArray notJpeg(200, 'x');
+        QVERIFY(!isPlausibleJpeg(notJpeg.constData(), size_t(notJpeg.size())));
     }
 
     // ---- MJPG ----

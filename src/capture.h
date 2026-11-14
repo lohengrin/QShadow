@@ -25,6 +25,17 @@ struct Stats {
     std::atomic<bool> frameYuv{false}; // last frame went to the GPU as planar YUV
 };
 
+// True when an MJPG buffer holds an actual picture. At 1920x1080 and the other
+// sizes above 720p the ShadowCast pads its 60 fps stream with 4-byte buffers
+// (just the SOI and EOI markers); they are not frames and must not be counted
+// or decoded. Any real JPEG carries tables and a scan, far more than this.
+inline bool isPlausibleJpeg(const char *data, size_t size)
+{
+    constexpr size_t kMinJpegBytes = 64;
+    return size >= kMinJpegBytes && static_cast<unsigned char>(data[0]) == 0xff
+           && static_cast<unsigned char>(data[1]) == 0xd8;
+}
+
 // One captured frame: a JPEG for MJPG, or raw packed pixels for YUYV
 // (width/height/stride describe the raw layout; unused for MJPG).
 struct Frame {

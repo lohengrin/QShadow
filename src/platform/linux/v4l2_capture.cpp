@@ -250,7 +250,14 @@ void V4l2Capture::run()
         const size_t used = buf.bytesused;
         // A short YUYV frame (dropped USB packets) can't be converted: skip it.
         const size_t rawSize = size_t(m_stride) * size_t(m_negotiated.height());
-        const bool complete = m_format == device::PixelFormat::Mjpg || used >= rawSize;
+        // An MJPG buffer must hold a real JPEG: the dongle pads some modes with
+        // empty 4-byte markers that are not frames.
+        const bool complete = m_format == device::PixelFormat::Mjpg
+                                  ? buf.index < uint32_t(m_bufferCount)
+                                        && isPlausibleJpeg(
+                                            static_cast<const char *>(m_buffers[buf.index].start),
+                                            used)
+                                  : used >= rawSize;
         if (used > 0 && complete && buf.index < uint32_t(m_bufferCount)) {
             Frame frame;
             const char *src = static_cast<const char *>(m_buffers[buf.index].start);
