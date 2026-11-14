@@ -62,8 +62,18 @@ jobs:
             mkdir -p "AppDir/usr/plugins/$(dirname "$d")"
             cp -a "$qtplugins/$d" "AppDir/usr/plugins/$(dirname "$d")/"
           done
+          # linuxdeploy does not follow the dependencies of the plugins copied above
+          # (libQt6WaylandEglClientHwIntegration was left out, so Qt could not load the
+          # wayland-egl client buffer integration and then creates no window decoration).
+          # Resolve their Qt libraries ourselves and hand them over explicitly.
+          libargs=()
+          while read -r lib; do libargs+=(--library "$lib"); done < <(
+            for so in AppDir/usr/plugins/wayland-*/*.so AppDir/usr/plugins/platforms/libqwayland-*.so; do
+              ldd "$so" | awk '/libQt6/ && $3 ~ /^\// {print $3}'
+            done | sort -u)
+          printf 'explicit Qt libraries: %s\n' "${libargs[@]}"
           # GPU / driver / session libraries always come from the host.
-          ./linuxdeploy --appdir AppDir --plugin qt --output appimage \
+          ./linuxdeploy --appdir AppDir --plugin qt --output appimage "${libargs[@]}" \
             --desktop-file AppDir/usr/share/applications/qshadow.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/qshadow.svg \
             --exclude-library 'libvulkan.so*' --exclude-library 'libasound.so*' \
@@ -79,9 +89,14 @@ jobs:
           "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract >/dev/null
           # Wayland client plugins must be present (title bar on GNOME needs bradient).
           find squashfs-root -path '*plugins*' -name '*.so' | sort
-          for f in libbradient.so libqwayland-egl.so; do
+          for f in libbradient.so libqwayland-egl.so libQt6WaylandClient.so.6 libQt6WaylandEglClientHwIntegration.so.6; do
             find squashfs-root -name "$f" | grep -q . || { echo "::error::AppImage lacks $f"; exit 1; }
           done
+          # Every Qt library a bundled plugin needs must resolve inside the AppImage.
+          missing=$(find squashfs-root/usr/plugins -name '*.so' | while read -r so; do
+            LD_LIBRARY_PATH="$PWD/squashfs-root/usr/lib" ldd "$so" | grep 'not found' | grep -i 'libQt6' | sed "s|^|$so: |"
+          done)
+          if [ -n "$missing" ]; then echo "$missing"; echo "::error::bundled plugins miss Qt libraries"; exit 1; fi
           if find squashfs-root -name 'libvulkan.so*' -o -name 'libasound.so*' \
                -o -name 'libEGL*' -o -name 'libgbm*' -o -name 'libwayland-client*' | grep .; then
             echo "::error::AppImage bundles host GPU/session libraries"; exit 1
