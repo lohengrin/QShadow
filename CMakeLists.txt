@@ -199,14 +199,38 @@ install(TARGETS qshadow RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 if(WIN32)
   # The post-build step above left every runtime DLL (vcpkg's applocal copies
   # the dependencies, windeployqt the Qt plugins) next to the exe: ship them all.
+  # vulkan-1.dll (the loader, copied because we link it) is deliberately left
+  # out: it must come from the GPU driver, a bundled one can shadow it.
   install(DIRECTORY "$<TARGET_FILE_DIR:qshadow>/" DESTINATION "${CMAKE_INSTALL_BINDIR}"
-          FILES_MATCHING PATTERN "*.dll")
+          FILES_MATCHING
+          PATTERN "vulkan-1*.dll" EXCLUDE
+          PATTERN "*.dll")
+  install(FILES LICENSE DESTINATION ".")
 endif()
 if(UNIX AND NOT APPLE)
   install(FILES qshadow.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
   install(FILES qshadow.svg
           DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
+  install(FILES LICENSE DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 endif()
+
+# ---------------------------------------------------------------------------
+# Packaging (cpack): portable ZIP on Windows, plain tar.gz on Linux. The Linux
+# AppImage is built from the install tree by CI (see .github/workflows).
+# ---------------------------------------------------------------------------
+set(CPACK_PACKAGE_NAME "qshadow")
+set(CPACK_PACKAGE_VENDOR "QShadow")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Low-latency viewer for the GENKI ShadowCast capture dongle")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+if(WIN32)
+  set(CPACK_GENERATOR ZIP)
+  set(CPACK_PACKAGE_FILE_NAME "qshadow-${PROJECT_VERSION}-windows-x64")
+else()
+  set(CPACK_GENERATOR TGZ)
+  set(CPACK_PACKAGE_FILE_NAME "qshadow-${PROJECT_VERSION}-linux-${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+include(CPack)
 
 # ---------------------------------------------------------------------------
 # Tests (no dongle, GPU or display needed): ctest --test-dir build

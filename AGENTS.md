@@ -79,6 +79,14 @@ use system tools:
 - Headless stats: `QSHADOW_STATS=1 ./build/qshadow` prints the status bar lines
   (rates, decode time, capture-to-render latency, audio buffer) to stderr.
 
+## CI and releases
+
+`.github/workflows/build.yml` (reusable) builds, tests and packages on Linux
+(apt Qt, AppImage + tar.gz) and Windows (vcpkg with a file binary cache, ZIP);
+`ci.yml` runs it on push/PR, `release.yml` on `v*` tags (the tag must match the
+version in `CMakeLists.txt` and `vcpkg.json`; use `scripts/bump-version.sh`).
+Never bundle `vulkan-1.dll`, `libvulkan`, ALSA, EGL/GL/gbm/drm or Wayland libs.
+
 ## Architecture
 
 Capture and audio input are the only OS-specific parts. They sit behind the

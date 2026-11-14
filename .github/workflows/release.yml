@@ -1,0 +1,49 @@
+# Push a tag vX.Y.Z (or vX.Y.Z-rc1 / -beta1 for a prerelease) to publish a release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match project version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          want="${tag%%-*}"   # strip -rc1 / -beta1
+          cmake_v=$(sed -n 's/^project(qshadow VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          vcpkg_v=$(jq -r .version vcpkg.json)
+          echo "tag=$want CMakeLists.txt=$cmake_v vcpkg.json=$vcpkg_v"
+          [ "$want" = "$cmake_v" ] && [ "$want" = "$vcpkg_v" ] || {
+            echo "::error::tag $GITHUB_REF_NAME does not match CMakeLists.txt ($cmake_v) / vcpkg.json ($vcpkg_v)"
+            exit 1
+          }
+
+  build:
+    needs: check-version
+    uses: ./.github/workflows/build.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: assets
+        run: sha256sum * | tee SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
