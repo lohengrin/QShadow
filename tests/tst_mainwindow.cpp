@@ -15,6 +15,9 @@
 #include <QToolBar>
 #include <QtTest>
 
+#include <functional>
+#include <memory>
+
 class TstMainWindow : public QObject {
     Q_OBJECT
 
@@ -92,19 +95,15 @@ private slots:
         QStringList top;
         QStringList shaders;
         bool fitEnabled = false;
-        QTimer::singleShot(200, [&] {
-            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
-            if (menu) {
-                for (QAction *a : menu->actions()) {
-                    top << a->text();
-                    if (a->text() == QLatin1String("Shader") && a->menu()) {
-                        for (QAction *s : a->menu()->actions())
-                            shaders << s->text();
-                    }
-                    if (a->text() == QLatin1String("Fit window to video"))
-                        fitEnabled = a->isEnabled();
+        withPopupMenu(this, [&](QMenu *menu) {
+            for (QAction *a : menu->actions()) {
+                top << a->text();
+                if (a->text() == QLatin1String("Shader") && a->menu()) {
+                    for (QAction *s : a->menu()->actions())
+                        shaders << s->text();
                 }
-                menu->close();
+                if (a->text() == QLatin1String("Fit window to video"))
+                    fitEnabled = a->isEnabled();
             }
         });
         QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
@@ -139,10 +138,7 @@ private slots:
         const int target = shader->findText(QStringLiteral("CRT-Geom"));
         QVERIFY(shader->currentIndex() != target);
 
-        QTimer::singleShot(200, [&] {
-            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
-            if (!menu)
-                return;
+        withPopupMenu(this, [&](QMenu *menu) {
             for (QAction *a : menu->actions()) {
                 if (a->text() == QLatin1String("Shader") && a->menu()) {
                     for (QAction *s : a->menu()->actions()) {
@@ -151,7 +147,6 @@ private slots:
                     }
                 }
             }
-            menu->close();
         });
         QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
         QCOMPARE(shader->currentIndex(), target);
@@ -167,17 +162,13 @@ private slots:
 
         bool fitEnabled = true;
         bool fullChecked = false;
-        QTimer::singleShot(200, [&] {
-            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
-            if (!menu)
-                return;
+        withPopupMenu(this, [&](QMenu *menu) {
             for (QAction *a : menu->actions()) {
                 if (a->text() == QLatin1String("Fit window to video"))
                     fitEnabled = a->isEnabled();
                 if (a->text().startsWith(QLatin1String("Fullscreen")))
                     fullChecked = a->isChecked();
             }
-            menu->close();
         });
         QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
         QVERIFY(!fitEnabled);
@@ -185,6 +176,37 @@ private slots:
     }
 
 private:
+    // showContextMenu() blocks in QMenu::exec(), so the menu has to be inspected and
+    // closed from a timer. Poll until it is up (how fast a popup becomes the active
+    // one varies by platform and CI machine) instead of checking once after a fixed
+    // delay, which left exec() blocked forever whenever the menu was not ready yet.
+    static void withPopupMenu(QObject *context, std::function<void(QMenu *)> inspect)
+    {
+        auto *timer = new QTimer(context);
+        auto attempts = std::make_shared<int>(0);
+        QObject::connect(timer, &QTimer::timeout, context, [timer, attempts, inspect] {
+            QMenu *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (!menu) {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    auto *m = qobject_cast<QMenu *>(w);
+                    if (m && m->isVisible()) {
+                        menu = m;
+                        break;
+                    }
+                }
+            }
+            if (menu) {
+                inspect(menu);
+                menu->close();
+            } else if (++*attempts < 100) { // ~5 s
+                return;
+            }
+            timer->stop();
+            timer->deleteLater();
+        });
+        timer->start(50);
+    }
+
     static QAction *fullscreenAction(MainWindow &w)
     {
         for (QAction *a : w.actions()) {

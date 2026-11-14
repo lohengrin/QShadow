@@ -102,6 +102,21 @@ ctest --test-dir build --output-on-failure
 sudo cmake --install build        # binary, desktop entry and icon under /usr/local
 ```
 
+## Releases and CI
+
+GitHub Actions (`.github/workflows/`) builds and tests every push to `master` and
+every pull request on Linux and Windows. Pushing a tag publishes a GitHub
+Release with `qshadow-<ver>-windows-x64.zip` (portable),
+`qshadow-<ver>-linux-x86_64.AppImage`, a `tar.gz` and `SHA256SUMS`. The
+Vulkan loader, ALSA, EGL/GL and Wayland libraries are never bundled; they come
+from the GPU driver / host system.
+
+```
+scripts/bump-version.sh 0.3.0     # CMakeLists.txt + vcpkg.json
+git commit -am "release v0.3.0"
+git tag v0.3.0 && git push origin HEAD v0.3.0   # -rc1 / -beta1 suffix = prerelease
+```
+
 ## Run
 
 ```
