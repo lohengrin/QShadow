@@ -81,11 +81,41 @@ use system tools:
 
 ## CI and releases
 
-`.github/workflows/build.yml` (reusable) builds, tests and packages on Linux
-(apt Qt, AppImage + tar.gz) and Windows (vcpkg with a file binary cache, ZIP);
-`ci.yml` runs it on push/PR, `release.yml` on `v*` tags (the tag must match the
-version in `CMakeLists.txt` and `vcpkg.json`; use `scripts/bump-version.sh`).
-Never bundle `vulkan-1.dll`, `libvulkan`, ALSA, EGL/GL/gbm/drm or Wayland libs.
+- `.github/workflows/build.yml` is the single, reusable build (Linux + Windows:
+  configure, build, ctest, package, verify the package). `ci.yml` (push to
+  `master` / PRs) and `release.yml` (tags `v*`) only call it. Do not duplicate
+  build steps in them.
+- Releases are tag-driven: `scripts/bump-version.sh X.Y.Z` (updates
+  `CMakeLists.txt` and `vcpkg.json`), merge, then push tag `vX.Y.Z`. `release.yml`
+  fails fast if the tag, `CMakeLists.txt` and `vcpkg.json` disagree; a tag with a
+  `-` suffix is published as a prerelease. Assets: Windows ZIP, Linux AppImage,
+  Linux tar.gz, `SHA256SUMS`. The agent sandbox cannot push tags (the proxy
+  returns 403); ask the user to push the tag.
+- Linux uses distro Qt from apt (Ubuntu 24.04); Windows uses vcpkg with the
+  `windows-ci` preset (Ninja) and a file binary cache under `actions/cache`.
+  Cold vcpkg builds take about 2.5 h: restore/save are separate steps and the
+  save runs even if later steps fail. Caches are scoped per ref: only runs on
+  `master` seed a cache that tags and other PRs can read.
+- **Packaging rules** (each is checked by a CI step; keep the checks when changing
+  packaging):
+  - never bundle `vulkan-1.dll`, `libvulkan`, ALSA, EGL/GL/gbm/drm, `libwayland-*`;
+  - Windows: `install(DIRECTORY ...)` must not sweep the build tree
+    (`vcpkg_installed`, `tests`, `CMakeFiles`, `_deps` are excluded) and the zip
+    stays well under 100 MB; `windeployqt` skips plugin types the app does not use;
+  - Linux AppImage: the app forces the Wayland platform, and `linuxdeploy-plugin-qt`
+    does not see the Wayland plugins, so the platform, decoration,
+    graphics-integration and shell-integration plugins are copied into the AppDir,
+    given RUNPATH `$ORIGIN/../../lib` with `patchelf`, and their Qt libraries are
+    passed to linuxdeploy with `--library`. Without
+    `libQt6WaylandEglClientHwIntegration.so.6` Qt cannot load the wayland-egl client
+    buffer integration and windows have no title bar. Verify packaging with
+    `readelf`, not `ldd`: the runner has system Qt installed and hides missing
+    libraries.
+- Windows tests run on the `offscreen` platform: `tests/CMakeLists.txt` deploys the
+  Qt plugins and `qoffscreen.dll` next to `tst_mainwindow` (the test hung at startup
+  without them). `ctest` runs with `--timeout 120` in CI, so a hang fails with a log.
+- `ctest` cannot be run locally without Qt; CI is the first real build for packaging
+  changes. Branch rulesets are not enforced on this private repository (free plan).
 
 ## Architecture
 
