@@ -51,6 +51,17 @@ jobs:
           chmod +x linuxdeploy linuxdeploy-plugin-qt
           export PATH="$PWD:$PATH"
           DESTDIR="$PWD/AppDir" cmake --install build
+          # The app forces the Wayland platform. linuxdeploy-plugin-qt does not see the
+          # Wayland plugins (the exe never links them), and without the client-side
+          # decoration plugin windows have no title bar on GNOME. Copy them explicitly.
+          qtplugins=$("$QMAKE" -query QT_INSTALL_PLUGINS)
+          for d in platforms/libqwayland-egl.so platforms/libqwayland-generic.so \
+                   wayland-decoration-client wayland-graphics-integration-client \
+                   wayland-shell-integration; do
+            test -e "$qtplugins/$d" || { echo "::error::missing $qtplugins/$d"; exit 1; }
+            mkdir -p "AppDir/usr/plugins/$(dirname "$d")"
+            cp -a "$qtplugins/$d" "AppDir/usr/plugins/$(dirname "$d")/"
+          done
           # GPU / driver / session libraries always come from the host.
           ./linuxdeploy --appdir AppDir --plugin qt --output appimage \
             --desktop-file AppDir/usr/share/applications/qshadow.desktop \
@@ -66,6 +77,11 @@ jobs:
         run: |
           cd "$(mktemp -d)"
           "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract >/dev/null
+          # Wayland client plugins must be present (title bar on GNOME needs bradient).
+          find squashfs-root -path '*plugins*' -name '*.so' | sort
+          for f in libbradient.so libqwayland-egl.so; do
+            find squashfs-root -name "$f" | grep -q . || { echo "::error::AppImage lacks $f"; exit 1; }
+          done
           if find squashfs-root -name 'libvulkan.so*' -o -name 'libasound.so*' \
                -o -name 'libEGL*' -o -name 'libgbm*' -o -name 'libwayland-client*' | grep .; then
             echo "::error::AppImage bundles host GPU/session libraries"; exit 1
@@ -148,6 +164,14 @@ jobs:
           if (Get-ChildItem verify -Recurse -Filter 'vulkan-1*.dll') {
             Write-Error "zip bundles vulkan-1.dll (must come from the GPU driver)"; exit 1
           }
+          Get-ChildItem verify -Recurse -File | Sort-Object Length -Descending |
+            Select-Object -First 40 @{n='MB';e={[math]::Round($_.Length/1MB,1)}}, FullName | Format-Table -AutoSize | Out-String -Width 200
+          $count = (Get-ChildItem verify -Recurse -File).Count
+          "files in zip: $count"
+          if (Get-ChildItem verify -Recurse -Directory | Where-Object { $_.Name -in 'vcpkg_installed','tests','CMakeFiles' }) {
+            Write-Error "zip contains build-tree directories"; exit 1
+          }
+          if ($zip.Length -gt 100MB) { Write-Error "zip is $([math]::Round($zip.Length/1MB)) MB (expected well under 100)"; exit 1 }
           if (-not (Get-ChildItem verify -Recurse -Filter qwindows.dll)) {
             Write-Error "zip is missing the Qt windows platform plugin"; exit 1
           }

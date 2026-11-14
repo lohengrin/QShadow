@@ -184,7 +184,9 @@ if(WIN32)
   if(TARGET Qt6::windeployqt)
     add_custom_command(TARGET qshadow POST_BUILD
       COMMAND Qt6::windeployqt --no-translations --no-system-d3d-compiler --no-opengl-sw
-              --no-compiler-runtime "$<TARGET_FILE:qshadow>"
+              --no-compiler-runtime
+              --skip-plugin-types iconengines,generic,networkinformation,tls
+              "$<TARGET_FILE:qshadow>"
       COMMENT "Deploying Qt runtime next to qshadow.exe")
   else()
     message(WARNING "Qt6::windeployqt not found; qshadow.exe will not find the Qt plugins")
@@ -201,9 +203,16 @@ if(WIN32)
   # the dependencies, windeployqt the Qt plugins) next to the exe: ship them all.
   # vulkan-1.dll (the loader, copied because we link it) is deliberately left
   # out: it must come from the GPU driver, a bundled one can shadow it.
+  # The exe directory is the build directory (Ninja) and also holds vcpkg_installed/
+  # (every dependency, debug and release), the test executables and CMake's own
+  # files: only ship what sits next to the exe and in the windeployqt plugin folders.
   install(DIRECTORY "$<TARGET_FILE_DIR:qshadow>/" DESTINATION "${CMAKE_INSTALL_BINDIR}"
           FILES_MATCHING
           PATTERN "vulkan-1*.dll" EXCLUDE
+          PATTERN "vcpkg_installed" EXCLUDE
+          PATTERN "tests" EXCLUDE
+          PATTERN "CMakeFiles" EXCLUDE
+          PATTERN "_deps" EXCLUDE
           PATTERN "*.dll")
   install(FILES LICENSE DESTINATION ".")
 endif()
