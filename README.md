@@ -102,20 +102,65 @@ ctest --test-dir build --output-on-failure
 sudo cmake --install build        # binary, desktop entry and icon under /usr/local
 ```
 
-## Releases and CI
+## CI and releases
 
-GitHub Actions (`.github/workflows/`) builds and tests every push to `master` and
-every pull request on Linux and Windows. Pushing a tag publishes a GitHub
-Release with `qshadow-<ver>-windows-x64.zip` (portable),
-`qshadow-<ver>-linux-x86_64.AppImage`, a `tar.gz` and `SHA256SUMS`. The
-Vulkan loader, ALSA, EGL/GL and Wayland libraries are never bundled; they come
-from the GPU driver / host system.
+GitHub Actions (`.github/workflows/`) builds, tests and packages QShadow on
+Linux and Windows:
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `ci.yml` | push to `master`, pull requests | calls `build.yml`; the packages are kept as run artifacts (Actions tab, *Artifacts*) |
+| `release.yml` | tag `v*` | checks the tag against the project version, calls `build.yml`, then publishes a GitHub Release |
+| `build.yml` | reusable | the actual build, shared by the two above |
+
+`build.yml` runs on both platforms: configure, build, `ctest`, package, then
+check the package contents (a failed check fails the build).
+
+- **Linux** (`ubuntu-24.04`, distro Qt from apt): `qshadow-<ver>-linux-x86_64.AppImage`
+  (Qt bundled, runs on most distros) and `qshadow-<ver>-linux-x86_64.tar.gz`
+  (binary, desktop file and icon only; needs system Qt).
+- **Windows** (`windows-2025`, MSVC + Ninja, dependencies from vcpkg through the
+  `windows-ci` preset): `qshadow-<ver>-windows-x64.zip`, portable (about 20 MB).
+
+Every release also carries a `SHA256SUMS` file.
+
+**What is deliberately not bundled:** the Vulkan loader (`vulkan-1.dll`,
+`libvulkan.so`), ALSA, EGL/GL/gbm/drm and `libwayland-*`. They must come from the
+GPU driver or the host system, and a bundled copy can shadow the right one. The
+Qt Wayland plugins and libraries *are* bundled in the AppImage: without them Qt
+cannot create client-side window decorations on GNOME.
+
+### Making a release
 
 ```
-scripts/bump-version.sh 0.3.0     # CMakeLists.txt + vcpkg.json
+scripts/bump-version.sh 0.3.0           # CMakeLists.txt + vcpkg.json
 git commit -am "release v0.3.0"
-git tag v0.3.0 && git push origin HEAD v0.3.0   # -rc1 / -beta1 suffix = prerelease
+git push origin HEAD                    # merge to master through a PR first
+git tag v0.3.0 && git push origin v0.3.0
 ```
+
+The tag must match the version in `CMakeLists.txt` and `vcpkg.json` (a suffix
+such as `-rc1` or `-beta1` is allowed and publishes a **prerelease**), otherwise
+`release.yml` stops at its first job. When it finishes, the release shows up
+under *Releases* with all four files.
+
+### Things to know
+
+- **First Windows build is slow (about 2.5 h).** vcpkg builds Qt from source. The
+  binary packages are cached with `actions/cache`, but GitHub only lets a run
+  read caches from its own branch/tag, its base branch and the default branch.
+  So the cache that counts is the one saved by a run on `master`; PR runs reuse
+  it afterwards (about 4 min), and a tag run can read it too. A tag run never
+  sees a cache that was saved by a PR branch. If `vcpkg.json` changes, the cache
+  key changes and the next build is cold again.
+- **Branch rules are not enforced** on a private repository on the free plan
+  (rulesets need a paid plan or a public repository). CI results are advisory
+  until then; merge only when both jobs are green.
+- Test a package from a PR before releasing: download it from the run's
+  *Artifacts* section (unzip, then run `qshadow.exe`, or run the AppImage).
+  For the AppImage on Wayland,
+  `QT_DEBUG_PLUGINS=1 ./qshadow-*.AppImage 2>&1 | grep -i -E "cannot load|client buffer"`
+  must print nothing.
 
 ## Run
 

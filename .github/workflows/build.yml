@@ -21,7 +21,7 @@ jobs:
             cmake ninja-build pkg-config file \
             qt6-base-dev qt6-multimedia-dev qt6-wayland libjpeg-turbo8-dev \
             libasound2-dev libvulkan-dev libwayland-dev libegl-dev libgles-dev \
-            libdrm-dev libgbm-dev glslang-tools
+            libdrm-dev libgbm-dev glslang-tools patchelf
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
@@ -51,8 +51,33 @@ jobs:
           chmod +x linuxdeploy linuxdeploy-plugin-qt
           export PATH="$PWD:$PATH"
           DESTDIR="$PWD/AppDir" cmake --install build
+          # The app forces the Wayland platform. linuxdeploy-plugin-qt does not see the
+          # Wayland plugins (the exe never links them), and without the client-side
+          # decoration plugin windows have no title bar on GNOME. Copy them explicitly.
+          qtplugins=$("$QMAKE" -query QT_INSTALL_PLUGINS)
+          for d in platforms/libqwayland-egl.so platforms/libqwayland-generic.so \
+                   wayland-decoration-client wayland-graphics-integration-client \
+                   wayland-shell-integration; do
+            test -e "$qtplugins/$d" || { echo "::error::missing $qtplugins/$d"; exit 1; }
+            mkdir -p "AppDir/usr/plugins/$(dirname "$d")"
+            cp -a "$qtplugins/$d" "AppDir/usr/plugins/$(dirname "$d")/"
+          done
+          # The copied plugins keep the distro's (empty) RUNPATH, so at run time the loader
+          # cannot find the Qt libraries bundled in usr/lib (e.g. the wayland-egl client
+          # integration), even when they are present. Point every plugin at usr/lib.
+          find AppDir/usr/plugins -name '*.so' -exec patchelf --set-rpath '$ORIGIN/../../lib' {} +
+          # linuxdeploy does not follow the dependencies of the plugins copied above
+          # (libQt6WaylandEglClientHwIntegration was left out, so Qt could not load the
+          # wayland-egl client buffer integration and then creates no window decoration).
+          # Resolve their Qt libraries ourselves and hand them over explicitly.
+          libargs=()
+          while read -r lib; do libargs+=(--library "$lib"); done < <(
+            for so in AppDir/usr/plugins/wayland-*/*.so AppDir/usr/plugins/platforms/libqwayland-*.so; do
+              ldd "$so" | awk '/libQt6/ && $3 ~ /^\// {print $3}'
+            done | sort -u)
+          printf 'explicit Qt libraries: %s\n' "${libargs[@]}"
           # GPU / driver / session libraries always come from the host.
-          ./linuxdeploy --appdir AppDir --plugin qt --output appimage \
+          ./linuxdeploy --appdir AppDir --plugin qt --output appimage "${libargs[@]}" \
             --desktop-file AppDir/usr/share/applications/qshadow.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/qshadow.svg \
             --exclude-library 'libvulkan.so*' --exclude-library 'libasound.so*' \
@@ -66,6 +91,22 @@ jobs:
         run: |
           cd "$(mktemp -d)"
           "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract >/dev/null
+          # Wayland client plugins must be present (title bar on GNOME needs bradient).
+          find squashfs-root -path '*plugins*' -name '*.so' | sort
+          for f in libbradient.so libqwayland-egl.so libQt6WaylandClient.so.6 libQt6WaylandEglClientHwIntegration.so.6; do
+            find squashfs-root -name "$f" | grep -q . || { echo "::error::AppImage lacks $f"; exit 1; }
+          done
+          # Every plugin must find its Qt libraries inside the AppImage. Do not use ldd
+          # here: the runner has a system Qt installed, which would hide the problem.
+          bad=0
+          while read -r so; do
+            readelf -d "$so" | grep -E 'RUNPATH|RPATH' | grep -q '\$ORIGIN/\.\./\.\./lib' || {
+              echo "no \$ORIGIN/../../lib RUNPATH: $so"; bad=1; }
+            for need in $(readelf -d "$so" | sed -n 's/.*NEEDED.*\[\(libQt6[^]]*\)\].*/\1/p'); do
+              test -e "squashfs-root/usr/lib/$need" || { echo "$so needs $need, not bundled"; bad=1; }
+            done
+          done < <(find squashfs-root/usr/plugins -path '*wayland*' -name '*.so' -o -name 'libqwayland-*.so')
+          [ "$bad" = 0 ] || { echo "::error::Wayland plugins cannot resolve their Qt libraries"; exit 1; }
           if find squashfs-root -name 'libvulkan.so*' -o -name 'libasound.so*' \
                -o -name 'libEGL*' -o -name 'libgbm*' -o -name 'libwayland-client*' | grep .; then
             echo "::error::AppImage bundles host GPU/session libraries"; exit 1
@@ -148,6 +189,14 @@ jobs:
           if (Get-ChildItem verify -Recurse -Filter 'vulkan-1*.dll') {
             Write-Error "zip bundles vulkan-1.dll (must come from the GPU driver)"; exit 1
           }
+          Get-ChildItem verify -Recurse -File | Sort-Object Length -Descending |
+            Select-Object -First 40 @{n='MB';e={[math]::Round($_.Length/1MB,1)}}, FullName | Format-Table -AutoSize | Out-String -Width 200
+          $count = (Get-ChildItem verify -Recurse -File).Count
+          "files in zip: $count"
+          if (Get-ChildItem verify -Recurse -Directory | Where-Object { $_.Name -in 'vcpkg_installed','tests','CMakeFiles' }) {
+            Write-Error "zip contains build-tree directories"; exit 1
+          }
+          if ($zip.Length -gt 100MB) { Write-Error "zip is $([math]::Round($zip.Length/1MB)) MB (expected well under 100)"; exit 1 }
           if (-not (Get-ChildItem verify -Recurse -Filter qwindows.dll)) {
             Write-Error "zip is missing the Qt windows platform plugin"; exit 1
           }
