@@ -48,11 +48,17 @@ MainWindow::MainWindow(QVulkanInstance *vulkan, QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    m_statusTimer.stop();
+    m_deviceTimer.stop();
     stopPipeline();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // No hotplug retry (which would start a new pipeline and audio sink) while
+    // the application is shutting down.
+    m_statusTimer.stop();
+    m_deviceTimer.stop();
     saveSettings();
     QMainWindow::closeEvent(event);
 }

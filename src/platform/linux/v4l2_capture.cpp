@@ -186,6 +186,7 @@ bool V4l2Capture::start(FrameQueue *out)
 
     qInfo() << "Capture:" << m_negotiated.width() << "x" << m_negotiated.height();
 
+    m_streaming = true;
     m_running = true;
     m_thread = std::thread([this] { run(); });
     return true;
@@ -201,9 +202,10 @@ void V4l2Capture::join()
     if (m_thread.joinable())
         m_thread.join();
     if (m_fd >= 0) {
-        if (m_running.load()) {
+        if (m_streaming) {
             uint32_t type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             xioctl(m_fd, VIDIOC_STREAMOFF, &type);
+            m_streaming = false;
         }
         for (int i = 0; i < m_bufferCount; ++i) {
             if (m_buffers[i].start)

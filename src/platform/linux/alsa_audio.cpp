@@ -117,7 +117,7 @@ void AlsaAudioInput::join()
         m_thread.join();
     if (m_handle) {
         auto *h = static_cast<snd_pcm_t *>(m_handle);
-        snd_pcm_drain(h);
+        snd_pcm_drop(h);
         snd_pcm_close(h);
         m_handle = nullptr;
     }

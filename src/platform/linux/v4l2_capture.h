@@ -47,6 +47,7 @@ private:
 
     QSize m_negotiated;
     int m_fps = 0;
+    bool m_streaming = false; // VIDIOC_STREAMON succeeded and not yet undone
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
