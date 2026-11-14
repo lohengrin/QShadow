@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "qshadow",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Low-latency viewer for the GENKI ShadowCast capture dongle",
   "builtin-baseline": "6ade29bbd5a4c7e99439ec52adbc63c073953a57",
   "dependencies": [
