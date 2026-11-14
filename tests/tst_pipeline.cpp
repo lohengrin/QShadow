@@ -1,7 +1,6 @@
 #include "capture.h"
 #include "decoder.h"
 
-#include <QBuffer>
 #include <QImage>
 #include <QPainter>
 #include <QtTest>
@@ -230,11 +229,7 @@ private slots:
         QVERIFY(!isPlausibleJpeg(marker, sizeof(marker)));
         QVERIFY(!isPlausibleJpeg(marker, 0));
 
-        const QImage img(64, 48, QImage::Format_RGB32);
-        QByteArray jpeg;
-        QBuffer buf(&jpeg);
-        buf.open(QIODevice::WriteOnly);
-        QVERIFY(img.save(&buf, "JPEG"));
+        const QByteArray jpeg = toJpeg(QImage(64, 48, QImage::Format_RGB32));
         QVERIFY(isPlausibleJpeg(jpeg.constData(), size_t(jpeg.size())));
 
         QByteArray notJpeg(200, 'x');
