@@ -102,19 +102,19 @@ void MainWindow::buildUi()
     };
 
     m_deviceCombo = new QComboBox(toolbar);
-    fixedWidth(m_deviceCombo, 14);
+    m_deviceCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents); // never truncate a name
     m_deviceCombo->setToolTip(QStringLiteral("Video capture device"));
     toolbar->addWidget(m_deviceCombo);
 
     m_sizeCombo = new QComboBox(toolbar);
-    fixedWidth(m_sizeCombo, 18);
+    m_sizeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_sizeCombo->setToolTip(QStringLiteral(
         "Resolution (and the frame rate it will run at; change the rate in the "
         "Options menu)"));
     toolbar->addWidget(m_sizeCombo);
 
     m_formatCombo = new QComboBox(toolbar);
-    fixedWidth(m_formatCombo, 5);
+    m_formatCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_formatCombo->setToolTip(QStringLiteral(
         "Pixel format. MJPG: compressed, high rates but with JPEG artifacts.\n"
         "Uncompressed formats (YUYV, NV12, ...): artifact-free, but limited by "
