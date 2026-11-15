@@ -8,6 +8,9 @@ QShadow grabs the video input of a capture device, shows it in a window, and
 plays its audio through your computer's speakers — with as little added delay
 as possible.
 
+![Screenshot](images/QShadow.png)
+
+
 ## Features
 
 - **Any capture device** — every video capture device is listed in the
