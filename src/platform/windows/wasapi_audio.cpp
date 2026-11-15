@@ -56,8 +56,8 @@ bool isPcm16Format(const WAVEFORMATEX *fmt)
     return false;
 }
 
-// True if the endpoint's topology leads to the ShadowCast USB device.
-bool endpointIsShadowCast(IMMDevice *endpoint)
+// True if the endpoint's topology leads to the USB device with these IDs.
+bool endpointOnUsbDevice(IMMDevice *endpoint, int vid, int pid)
 {
     ComPtr<IDeviceTopology> topology;
     if (SUCCEEDED(endpoint->Activate(__uuidof(IDeviceTopology), CLSCTX_ALL, nullptr,
@@ -69,33 +69,21 @@ bool endpointIsShadowCast(IMMDevice *endpoint)
             if (FAILED(topology->GetConnector(i, &connector)))
                 continue;
             LPWSTR id = nullptr;
+            int v = 0;
+            int p = 0;
             if (SUCCEEDED(connector->GetDeviceIdConnectedTo(&id))
-                && wincom::isShadowCastPath(coString(id)))
+                && wincom::parseVidPid(coString(id), &v, &p) && v == vid && p == pid)
                 return true;
         }
     }
     return false;
 }
 
-QString endpointName(IMMDevice *endpoint)
-{
-    ComPtr<IPropertyStore> props;
-    QString name;
-    if (SUCCEEDED(endpoint->OpenPropertyStore(STGM_READ, &props))) {
-        PROPVARIANT v;
-        PropVariantInit(&v);
-        if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &v)) && v.vt == VT_LPWSTR)
-            name = QString::fromWCharArray(v.pwszVal);
-        PropVariantClear(&v);
-    }
-    return name;
-}
-
 } // namespace
 
 namespace wasapi {
 
-QString findCaptureEndpoint()
+QString findCaptureEndpoint(int vid, int pid)
 {
     wincom::ComThread com;
     ComPtr<IMMDeviceEnumerator> enumerator;
@@ -108,7 +96,6 @@ QString findCaptureEndpoint()
 
     UINT count = 0;
     endpoints->GetCount(&count);
-    QString byName;
     for (UINT i = 0; i < count; ++i) {
         ComPtr<IMMDevice> endpoint;
         if (FAILED(endpoints->Item(i, &endpoint)))
@@ -117,16 +104,46 @@ QString findCaptureEndpoint()
         if (FAILED(endpoint->GetId(&rawId)))
             continue;
         const QString id = coString(rawId);
-        // Identify it by the USB IDs; fall back to the name only if no endpoint
-        // resolves to the dongle that way.
-        if (endpointIsShadowCast(endpoint.Get()))
+        if (endpointOnUsbDevice(endpoint.Get(), vid, pid))
             return id;
-        if (byName.isEmpty()
-            && endpointName(endpoint.Get()).contains(QStringLiteral("ShadowCast"),
-                                                     Qt::CaseInsensitive))
-            byName = id;
     }
-    return byName;
+    return {};
+}
+
+QList<platform::AudioInputInfo> listCaptureEndpoints()
+{
+    QList<platform::AudioInputInfo> result;
+    wincom::ComThread com;
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                IID_PPV_ARGS(&enumerator))))
+        return result;
+    ComPtr<IMMDeviceCollection> endpoints;
+    if (FAILED(enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &endpoints)))
+        return result;
+
+    UINT count = 0;
+    endpoints->GetCount(&count);
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<IMMDevice> endpoint;
+        LPWSTR rawId = nullptr;
+        if (FAILED(endpoints->Item(i, &endpoint)) || FAILED(endpoint->GetId(&rawId)))
+            continue;
+        platform::AudioInputInfo info;
+        info.id = coString(rawId);
+        ComPtr<IPropertyStore> props;
+        if (SUCCEEDED(endpoint->OpenPropertyStore(STGM_READ, &props))) {
+            PROPVARIANT v;
+            PropVariantInit(&v);
+            if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &v)) && v.vt == VT_LPWSTR)
+                info.name = QString::fromWCharArray(v.pwszVal);
+            PropVariantClear(&v);
+        }
+        if (info.name.isEmpty())
+            info.name = info.id;
+        result.append(info);
+    }
+    return result;
 }
 
 } // namespace wasapi
@@ -145,7 +162,7 @@ WasapiAudioInput::~WasapiAudioInput()
 bool WasapiAudioInput::start()
 {
     if (m_endpointId.isEmpty()) {
-        m_error = QStringLiteral("ShadowCast audio endpoint not found");
+        m_error = QStringLiteral("Audio endpoint not found");
         return false;
     }
     m_stop.store(false);
@@ -198,7 +215,7 @@ void WasapiAudioInput::run(std::promise<bool> *ready)
                                 IID_PPV_ARGS(&enumerator)))
         || FAILED(enumerator->GetDevice(reinterpret_cast<LPCWSTR>(m_endpointId.utf16()),
                                         &endpoint))) {
-        fail(QStringLiteral("ShadowCast audio endpoint is gone"));
+        fail(QStringLiteral("Audio endpoint is gone"));
         return;
     }
 

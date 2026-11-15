@@ -10,12 +10,12 @@
 #include <atomic>
 #include <thread>
 
-// V4L2 MJPG/YUYV capture using mmap streaming, run on its own thread.
+// V4L2 capture (MJPG and the uncompressed formats of device.h) using mmap streaming, run on its own thread.
 // One captured frame in -> one Frame out; never blocks the decoder.
 class V4l2Capture : public CaptureSource {
 public:
     V4l2Capture(const QString &devicePath, const QSize &targetSize,
-                device::PixelFormat format, Stats *stats);
+                device::PixelFormat format, int fps, Stats *stats);
     ~V4l2Capture() override;
 
     bool start(FrameQueue *out) override;
@@ -36,6 +36,8 @@ private:
     bool m_quiet = false;
     QString m_discard;
     device::PixelFormat m_format;
+    int m_requestedFps; // 0: the highest the device offers
+    device::ColorInfo m_color;
     int m_stride = 0;
     Stats *m_stats;
     FrameQueue *m_queue = nullptr;

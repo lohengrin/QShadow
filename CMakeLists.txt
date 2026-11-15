@@ -235,7 +235,7 @@ endif()
 set(CPACK_PACKAGE_NAME "qshadow")
 set(CPACK_PACKAGE_VENDOR "QShadow")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
-    "Low-latency viewer for the GENKI ShadowCast capture dongle")
+    "Low-latency viewer for USB video capture devices")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 if(WIN32)
   set(CPACK_GENERATOR ZIP)

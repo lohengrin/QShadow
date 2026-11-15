@@ -12,8 +12,10 @@
 #include <QComboBox>
 #include <QLayout>
 #include <QMenu>
+#include <QSettings>
 #include <QSlider>
 #include <QStatusBar>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
 #include <QtTest>
@@ -25,6 +27,75 @@ class TstMainWindow : public QObject {
     Q_OBJECT
 
 private slots:
+    // Never touch the user's real settings: the window saves them on close.
+    void initTestCase()
+    {
+        QVERIFY(m_config.isValid());
+        QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, m_config.path());
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_config.path());
+        QCoreApplication::setOrganizationName(QStringLiteral("QShadowTest"));
+        QCoreApplication::setApplicationName(QStringLiteral("tst_mainwindow"));
+    }
+
+    void init() { QSettings().clear(); }
+
+    // Settings written by versions that knew a single device (no device, rate or
+    // audio source keys) still load, keep their values, and gain the new keys.
+    void legacySettingsLoadAndAreKept()
+    {
+        {
+            QSettings s;
+            s.setValue(QStringLiteral("pixelFormat"), 1);
+            s.setValue(QStringLiteral("videoWidth"), 1280);
+            s.setValue(QStringLiteral("videoHeight"), 720);
+            s.setValue(QStringLiteral("shader"), 2);
+            s.setValue(QStringLiteral("volume"), 42);
+        }
+        {
+            MainWindow w(nullptr);
+            w.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&w));
+            // Defaults for what the old file lacked: the device's own audio.
+            QComboBox *audio = nullptr;
+            for (QComboBox *c : w.findChildren<QComboBox *>()) {
+                if (c->findText(QStringLiteral("Device audio")) >= 0)
+                    audio = c;
+            }
+            QVERIFY(audio);
+            QCOMPARE(audio->currentData().toString(), QStringLiteral("auto"));
+            w.close();
+        }
+        QSettings s;
+        QCOMPARE(s.value(QStringLiteral("pixelFormat")).toInt(), 1);
+        QCOMPARE(s.value(QStringLiteral("videoWidth")).toInt(), 1280);
+        QCOMPARE(s.value(QStringLiteral("shader")).toInt(), 2);
+        QCOMPARE(s.value(QStringLiteral("volume")).toInt(), 42);
+        QVERIFY(s.contains(QStringLiteral("deviceKey")));
+        QCOMPARE(s.value(QStringLiteral("audioSource")).toString(), QStringLiteral("auto"));
+        QCOMPARE(s.value(QStringLiteral("videoFps")).toInt(), 0);
+    }
+
+    void aSavedAudioSourceThatIsGoneFallsBackWithoutBeingForgotten()
+    {
+        QSettings().setValue(QStringLiteral("audioSource"), QStringLiteral("in:No Such Microphone"));
+        {
+            MainWindow w(nullptr);
+            w.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&w));
+            QComboBox *audio = nullptr;
+            for (QComboBox *c : w.findChildren<QComboBox *>()) {
+                if (c->findText(QStringLiteral("Device audio")) >= 0)
+                    audio = c;
+            }
+            QVERIFY(audio);
+            QCOMPARE(audio->currentData().toString(), QStringLiteral("auto"));
+            w.close();
+        }
+        // The choice comes back if the microphone is plugged in again.
+        QCOMPARE(QSettings().value(QStringLiteral("audioSource")).toString(),
+                 QStringLiteral("in:No Such Microphone"));
+    }
+
     void fullscreenHidesEverythingButTheVideo()
     {
         MainWindow w(nullptr);
@@ -111,7 +182,8 @@ private slots:
         });
         QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
 
-        for (const char *expected : {"Preserve aspect", "Format", "Resolution", "Shader",
+        for (const char *expected : {"Preserve aspect", "Format", "Resolution", "Rate",
+                                     "Audio source", "Shader",
                                      "Downscale", "Volume", "Fit window to video"})
             QVERIFY2(top.contains(QLatin1String(expected)), expected);
         QVERIFY(top.filter(QStringLiteral("Fullscreen")).size() == 1);
@@ -209,6 +281,8 @@ private:
         });
         timer->start(50);
     }
+
+    QTemporaryDir m_config;
 
     static QAction *fullscreenAction(MainWindow &w)
     {

@@ -3,6 +3,8 @@
 
 #include "mainwindow.h"
 
+#include "devicequirks.h"
+
 #include "decoder.h"
 #include "device.h"
 #include "platform/platform.h"
@@ -25,6 +27,8 @@
 #include <QVulkanInstance>
 #include <QWidgetAction>
 #include <QWidget>
+
+#include <cstdlib>
 
 #include <chrono>
 #include <cmath>
@@ -68,7 +72,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::buildUi()
 {
-    setWindowTitle(QStringLiteral("QShadow — ShadowCast Viewer"));
+    setWindowTitle(QStringLiteral("QShadow"));
 
     auto *central = new QWidget(this);
     auto *layout = new QVBoxLayout(central);
@@ -84,6 +88,13 @@ void MainWindow::buildUi()
     toolbar->addWidget(m_aspectCheck);
 
     toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral(" Device: "), toolbar));
+    m_deviceCombo = new QComboBox(toolbar);
+    m_deviceCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_deviceCombo->setToolTip(QStringLiteral("Video capture device"));
+    toolbar->addWidget(m_deviceCombo);
+
+    toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral(" Format: "), toolbar));
     m_formatCombo = new QComboBox(toolbar);
     m_formatCombo->setToolTip(QStringLiteral(
@@ -96,6 +107,11 @@ void MainWindow::buildUi()
     toolbar->addWidget(new QLabel(QStringLiteral(" Resolution: "), toolbar));
     m_resCombo = new QComboBox(toolbar);
     toolbar->addWidget(m_resCombo);
+
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral(" Rate: "), toolbar));
+    m_rateCombo = new QComboBox(toolbar);
+    toolbar->addWidget(m_rateCombo);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral(" Shader: "), toolbar));
@@ -134,6 +150,13 @@ void MainWindow::buildUi()
         QStringLiteral("Nearest-neighbour downscale of the capture, matching "
                        "the source's own pre-upscale, before the video shader"));
     toolbar->addWidget(m_downscaleCombo);
+
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral(" Audio: "), toolbar));
+    m_audioCombo = new QComboBox(toolbar);
+    m_audioCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_audioCombo->setToolTip(QStringLiteral("Audio source: the device's own audio, none, or any input"));
+    toolbar->addWidget(m_audioCombo);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral(" Volume: "), toolbar));
@@ -181,8 +204,11 @@ void MainWindow::buildUi()
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](int v) {
         m_audioSink.setVolume(qreal(v) / 100.0);
     });
+    connect(m_deviceCombo, &QComboBox::activated, this, &MainWindow::onDeviceChanged);
+    connect(m_audioCombo, &QComboBox::activated, this, &MainWindow::onAudioChanged);
     connect(m_formatCombo, &QComboBox::activated, this, &MainWindow::onFormatChanged);
     connect(m_resCombo, &QComboBox::activated, this, &MainWindow::onResolutionChanged);
+    connect(m_rateCombo, &QComboBox::activated, this, &MainWindow::onRateChanged);
     connect(m_shaderCombo, qOverload<int>(&QComboBox::activated), this,
             [this](int index) {
                 m_video->setShaderMode(VideoWidget::ShaderMode(
@@ -273,6 +299,8 @@ void MainWindow::showContextMenu(const QPoint &globalPos)
     };
     comboMenu(QStringLiteral("Format"), m_formatCombo);
     comboMenu(QStringLiteral("Resolution"), m_resCombo);
+    comboMenu(QStringLiteral("Rate"), m_rateCombo);
+    comboMenu(QStringLiteral("Audio source"), m_audioCombo);
     comboMenu(QStringLiteral("Shader"), m_shaderCombo);
     comboMenu(QStringLiteral("Downscale"), m_downscaleCombo);
 
@@ -334,25 +362,63 @@ void MainWindow::fitToPipeline()
 
 bool MainWindow::connectDevice()
 {
-    const platform::DeviceIds ids = platform::findDevice();
-    const QString path = ids.video;
-    if (path.isEmpty()) {
-        m_devicePath.clear();
-        m_sizes.clear();
-        return false;
+    const QList<platform::DeviceInfo> devices = platform::listDevices();
+
+    // Refill the device list only when it changed, so an open drop-down is not
+    // yanked away by the periodic retry.
+    auto sameDevices = [&] {
+        if (devices.size() != m_devices.size())
+            return false;
+        for (qsizetype i = 0; i < devices.size(); ++i) {
+            if (devices[i].key() != m_devices[i].key() || devices[i].videoId != m_devices[i].videoId
+                || devices[i].audioId != m_devices[i].audioId)
+                return false;
+        }
+        return true;
+    };
+    if (!sameDevices() || m_deviceCombo->count() != devices.size()) {
+        m_devices = devices;
+        const QSignalBlocker blocker(m_deviceCombo);
+        m_deviceCombo->clear();
+        for (const platform::DeviceInfo &d : std::as_const(m_devices))
+            m_deviceCombo->addItem(d.name, d.key());
     }
 
+    auto fail = [&](const QString &why) {
+        m_devicePath.clear();
+        m_pairedAudioId.clear();
+        m_audioId.clear();
+        m_sizes.clear();
+        m_idleStatus = why;
+        return false;
+    };
+    if (m_devices.isEmpty())
+        return fail(QStringLiteral("Waiting for a video capture device…"));
+
+    // The user's device if present, else the first one (without forgetting the
+    // choice, so the preferred device is picked again once it comes back).
+    qsizetype pick = 0;
+    for (qsizetype i = 0; i < m_devices.size(); ++i) {
+        if (m_devices[i].key() == m_prefDevice) {
+            pick = i;
+            break;
+        }
+    }
+    {
+        const QSignalBlocker blocker(m_deviceCombo);
+        m_deviceCombo->setCurrentIndex(int(pick));
+    }
+    const platform::DeviceInfo &dev = m_devices[pick];
+    const QString path = dev.videoId;
+
     QHash<int, QList<device::Mode>> sizes;
-    for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
+    for (auto format : device::kAllFormats) {
         const QList<device::Mode> list = platform::enumerateModes(path, format);
         if (!list.isEmpty())
             sizes.insert(int(format), list);
     }
-    if (sizes.isEmpty()) {
-        m_devicePath.clear();
-        m_sizes.clear();
-        return false;
-    }
+    if (sizes.isEmpty())
+        return fail(QStringLiteral("%1: no supported video format").arg(dev.name));
 
     // Only touch the toolbar when something changed, so an open drop-down is
     // not yanked away by the periodic retry.
@@ -362,11 +428,9 @@ bool MainWindow::connectDevice()
         {
             const QSignalBlocker blocker(m_formatCombo);
             m_formatCombo->clear();
-            for (auto format : {device::PixelFormat::Mjpg, device::PixelFormat::Yuyv}) {
+            for (auto format : device::kAllFormats) {
                 if (m_sizes.contains(int(format)))
-                    m_formatCombo->addItem(format == device::PixelFormat::Mjpg
-                                               ? QStringLiteral("MJPG")
-                                               : QStringLiteral("YUYV"),
+                    m_formatCombo->addItem(QLatin1String(device::formatName(format)),
                                            int(format));
             }
             const int idx = m_formatCombo->findData(m_prefFormat);
@@ -375,23 +439,98 @@ bool MainWindow::connectDevice()
         }
         populateResolutions(m_prefSize);
     }
-    m_audioId = ids.audio;
+    m_pairedAudioId = dev.audioId;
+    updateAudioSources();
+    m_vid = dev.vid;
+    m_pid = dev.pid;
     return true;
+}
+
+void MainWindow::updateAudioSources()
+{
+    const QList<platform::AudioInputInfo> inputs = platform::listAudioInputs();
+    bool same = inputs.size() == m_audioInputs.size() && m_audioCombo->count() == inputs.size() + 2;
+    for (qsizetype i = 0; same && i < inputs.size(); ++i)
+        same = inputs[i].name == m_audioInputs[i].name && inputs[i].id == m_audioInputs[i].id;
+    if (!same) {
+        m_audioInputs = inputs;
+        const QSignalBlocker blocker(m_audioCombo);
+        m_audioCombo->clear();
+        m_audioCombo->addItem(QStringLiteral("Device audio"), QStringLiteral("auto"));
+        m_audioCombo->addItem(QStringLiteral("None"), QStringLiteral("none"));
+        for (const platform::AudioInputInfo &in : std::as_const(m_audioInputs))
+            m_audioCombo->addItem(in.name, QStringLiteral("in:") + in.name);
+    }
+    // A saved input that is gone falls back to the device's audio without
+    // forgetting the choice.
+    QString effective = m_prefAudio;
+    int idx = m_audioCombo->findData(effective);
+    if (idx < 0) {
+        effective = QStringLiteral("auto");
+        idx = 0;
+    }
+    {
+        const QSignalBlocker blocker(m_audioCombo);
+        m_audioCombo->setCurrentIndex(idx);
+    }
+    if (effective == QLatin1String("none")) {
+        m_audioId.clear();
+    } else if (effective == QLatin1String("auto")) {
+        m_audioId = m_pairedAudioId;
+    } else {
+        m_audioId.clear();
+        for (const platform::AudioInputInfo &in : std::as_const(m_audioInputs)) {
+            if (QLatin1String("in:") + in.name == effective)
+                m_audioId = in.id;
+        }
+    }
 }
 
 void MainWindow::populateResolutions(const QSize &preferred)
 {
     const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
-    const QSignalBlocker blocker(m_resCombo);
-    m_resCombo->clear();
-    for (const device::Mode &mode : m_sizes.value(int(format))) {
-        m_resCombo->addItem(QStringLiteral("%1x%2 @ %3 fps")
-                                .arg(mode.size.width()).arg(mode.size.height()).arg(mode.fps),
-                            mode.size);
+    {
+        const QSignalBlocker blocker(m_resCombo);
+        m_resCombo->clear();
+        for (const device::Mode &mode : m_sizes.value(int(format)))
+            m_resCombo->addItem(QStringLiteral("%1x%2")
+                                    .arg(mode.size.width()).arg(mode.size.height()),
+                                mode.size);
+        const int idx = m_resCombo->findData(preferred);
+        if (idx >= 0)
+            m_resCombo->setCurrentIndex(idx);
     }
-    const int idx = m_resCombo->findData(preferred);
-    if (idx >= 0)
-        m_resCombo->setCurrentIndex(idx);
+    populateRates(m_prefFps);
+}
+
+void MainWindow::populateRates(int preferred)
+{
+    const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
+    const QSize size = m_resCombo->currentData().toSize();
+    QList<int> rates;
+    for (const device::Mode &mode : m_sizes.value(int(format))) {
+        if (mode.size == size) {
+            rates = mode.rates.isEmpty() && mode.fps > 0 ? QList<int>{mode.fps} : mode.rates;
+            break;
+        }
+    }
+    const QSignalBlocker blocker(m_rateCombo);
+    m_rateCombo->clear();
+    if (rates.isEmpty()) {
+        m_rateCombo->addItem(QStringLiteral("Auto"), 0);
+        return;
+    }
+    for (int r : std::as_const(rates))
+        m_rateCombo->addItem(QStringLiteral("%1 fps").arg(r), r);
+    // The preferred rate, else the nearest one (0 selects the highest, item 0).
+    int best = 0;
+    if (preferred > 0) {
+        for (int i = 1; i < rates.size(); ++i) {
+            if (std::abs(rates[i] - preferred) < std::abs(rates[best] - preferred))
+                best = i;
+        }
+    }
+    m_rateCombo->setCurrentIndex(best);
 }
 
 void MainWindow::loadSettings()
@@ -427,8 +566,11 @@ void MainWindow::loadSettings()
     // also hand it to a not-yet-open sink so it takes effect on start.
     m_audioSink.setVolume(qreal(m_volumeSlider->value()) / 100.0);
 
+    m_prefDevice = settings.value(QStringLiteral("deviceKey")).toString();
+    m_prefAudio = settings.value(QStringLiteral("audioSource"), QStringLiteral("auto")).toString();
     m_prefFormat = settings.value(QStringLiteral("pixelFormat"),
                                   int(device::PixelFormat::Mjpg)).toInt();
+    m_prefFps = settings.value(QStringLiteral("videoFps"), 0).toInt();
     m_prefSize = QSize(settings.value(QStringLiteral("videoWidth")).toInt(),
                        settings.value(QStringLiteral("videoHeight")).toInt());
     m_video->setPreserveAspect(m_aspectCheck->isChecked());
@@ -444,7 +586,10 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("shader"), m_shaderCombo->currentData().toInt());
     settings.setValue(QStringLiteral("downscale"), m_downscaleCombo->currentData().toInt());
 
+    settings.setValue(QStringLiteral("deviceKey"), m_prefDevice);
+    settings.setValue(QStringLiteral("audioSource"), m_prefAudio);
     settings.setValue(QStringLiteral("pixelFormat"), m_prefFormat);
+    settings.setValue(QStringLiteral("videoFps"), m_prefFps);
     if (m_prefSize.isValid()) {
         settings.setValue(QStringLiteral("videoWidth"), m_prefSize.width());
         settings.setValue(QStringLiteral("videoHeight"), m_prefSize.height());
@@ -478,13 +623,15 @@ bool MainWindow::startVideo()
 
     m_queue.clear();
     const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
-    m_capture = platform::createCapture(m_devicePath, target, format, &m_stats);
+    m_capture = platform::createCapture(m_devicePath, target, format,
+                                        m_rateCombo->currentData().toInt(), &m_stats);
     VideoWidget *video = m_video;
     m_decoder = new Decoder(&m_queue, &m_stats,
                             [video](const VideoFramePtr &frame, std::chrono::steady_clock::time_point stamp) {
                                 video->submitFrame(frame, stamp);
                             });
     m_decoder->setGpuYuvCheck([video] { return video->gpuYuvSupported(); });
+    m_decoder->setColorOverride(quirks::colorOverride(m_vid, m_pid, format));
 
     m_capture->setQuiet(m_captureFailing);
     const bool capOk = m_capture->start(&m_queue);
@@ -512,6 +659,8 @@ void MainWindow::stopVideo()
 
 void MainWindow::startAudio()
 {
+    if (m_audioId.isEmpty())
+        return; // no audio interface paired with this device: video only
     m_ring.clear();
     m_audio = platform::createAudioInput(m_audioId, &m_ring, &m_stats);
 
@@ -544,6 +693,30 @@ void MainWindow::checkDevice()
         startPipeline();
 }
 
+void MainWindow::onDeviceChanged(int index)
+{
+    if (index < 0 || index >= m_devices.size())
+        return;
+    m_prefDevice = m_devices[index].key();
+    // A different device: its formats and sizes replace the lists wholesale.
+    stopPipeline();
+    m_devicePath.clear();
+    if (connectDevice())
+        startPipeline();
+}
+
+void MainWindow::onAudioChanged(int index)
+{
+    if (index < 0)
+        return;
+    m_prefAudio = m_audioCombo->itemData(index).toString();
+    updateAudioSources();
+    // Only the audio restarts; the video keeps running.
+    stopAudio();
+    if (m_capture && m_capture->isRunning())
+        startAudio();
+}
+
 void MainWindow::onFormatChanged(int index)
 {
     if (index < 0)
@@ -552,6 +725,7 @@ void MainWindow::onFormatChanged(int index)
     // Keep the current size if the new format offers it, else its largest.
     populateResolutions(m_resCombo->currentData().toSize());
     m_prefSize = m_resCombo->currentData().toSize();
+    m_prefFps = m_rateCombo->currentData().toInt();
     stopVideo();
     startVideo();
 }
@@ -561,7 +735,18 @@ void MainWindow::onResolutionChanged(int index)
     if (index < 0)
         return;
     m_prefSize = m_resCombo->currentData().toSize();
+    populateRates(m_prefFps); // keeps the rate if the new size offers it
+    m_prefFps = m_rateCombo->currentData().toInt();
     // Only the video needs to restart; the audio keeps playing.
+    stopVideo();
+    startVideo();
+}
+
+void MainWindow::onRateChanged(int index)
+{
+    if (index < 0)
+        return;
+    m_prefFps = m_rateCombo->currentData().toInt();
     stopVideo();
     startVideo();
 }
@@ -569,7 +754,7 @@ void MainWindow::onResolutionChanged(int index)
 void MainWindow::updateStatus()
 {
     if (m_devicePath.isEmpty()) {
-        m_status->setText(QStringLiteral("Waiting for the ShadowCast dongle (298f:1996)…"));
+        m_status->setText(m_idleStatus);
         m_statsLabel->clear();
         return;
     }

@@ -278,6 +278,43 @@ private slots:
         QVERIFY2(qAbs(diff) <= 4 * 4, qPrintable(QString::number(diff)));
     }
 
+    void pipelineResamples44100To48000()
+    {
+        AudioRing ring;
+        AudioPipeline pipe(&ring, 44100, 1);
+        std::vector<int16_t> in(441, 1000);
+        for (int i = 0; i < 5; ++i) // 50 ms of 44.1 kHz in 10 ms chunks
+            pipe.process(in.data(), in.size());
+        const size_t frames = ring.depthBytes() / 4;
+        QVERIFY2(frames >= 2370 && frames <= 2430, qPrintable(QString::number(frames)));
+        std::vector<int16_t> out(frames * 2);
+        ring.pull(reinterpret_cast<char *>(out.data()), qint64(out.size() * 2));
+        for (size_t i = 2; i < frames; ++i) // [0] is the resampler's priming sample
+            QCOMPARE(out[2 * i], int16_t(1000));
+    }
+
+    void pipelineKeepsTheToneFrequencyWhenResampling()
+    {
+        // 1 kHz at 44.1 kHz must still be 1 kHz at 48 kHz: count zero crossings.
+        AudioRing ring;
+        AudioPipeline pipe(&ring, 44100, 1);
+        std::vector<int16_t> in(441);
+        size_t n = 0;
+        std::vector<int16_t> all;
+        for (int chunk = 0; chunk < 5; ++chunk) {
+            for (auto &v : in)
+                v = int16_t(10000 * std::sin(2.0 * kPi * 1000.0 * double(n++) / 44100.0));
+            pipe.process(in.data(), in.size());
+        }
+        std::vector<int16_t> out(ring.depthBytes() / 2);
+        ring.pull(reinterpret_cast<char *>(out.data()), qint64(out.size() * 2));
+        int crossings = 0;
+        for (size_t i = 3; i < out.size(); i += 2)
+            crossings += (out[i - 2] < 0) != (out[i] < 0);
+        // 1 kHz over ~50 ms: 50 periods = ~100 crossings.
+        QVERIFY2(crossings >= 96 && crossings <= 104, qPrintable(QString::number(crossings)));
+    }
+
     void pipelineReportsDriftWhenTheRingRunsFull()
     {
         AudioRing ring;

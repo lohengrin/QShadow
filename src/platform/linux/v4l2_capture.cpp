@@ -4,6 +4,7 @@
 #include "v4l2_capture.h"
 
 #include "v4l2_common.h"
+#include "v4l2_device.h"
 
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
@@ -12,6 +13,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include <chrono>
@@ -40,8 +42,9 @@ std::chrono::steady_clock::time_point frameStamp(const v4l2_buffer &buf)
 } // namespace
 
 V4l2Capture::V4l2Capture(const QString &devicePath, const QSize &targetSize,
-                         device::PixelFormat format, Stats *stats)
-    : m_devicePath(devicePath), m_targetSize(targetSize), m_format(format), m_stats(stats)
+                         device::PixelFormat format, int fps, Stats *stats)
+    : m_devicePath(devicePath), m_targetSize(targetSize), m_format(format),
+      m_requestedFps(fps), m_stats(stats)
 {
 }
 
@@ -102,30 +105,36 @@ bool V4l2Capture::start(FrameQueue *out)
     }
     m_negotiated = QSize(fmt.fmt.pix.width, fmt.fmt.pix.height);
     m_stride = int(fmt.fmt.pix.bytesperline);
-    if (m_format == device::PixelFormat::Yuyv && m_stride < m_negotiated.width() * 2)
-        m_stride = m_negotiated.width() * 2;
+    m_stride = std::max(m_stride, device::minStride(m_format, m_negotiated.width()));
 
-    // Fastest offered interval for the negotiated size.
+    // What the driver says about the colour encoding (devicequirks.h may override).
     {
-        struct v4l2_frmivalenum fiv;
-        std::memset(&fiv, 0, sizeof(fiv));
-        fiv.pixel_format = toFourcc(m_format);
-        fiv.width = uint32_t(m_negotiated.width());
-        fiv.height = uint32_t(m_negotiated.height());
-        double bestUs = 0.0;
-        bool any = false;
-        while (xioctl(m_fd, VIDIOC_ENUM_FRAMEINTERVALS, &fiv) == 0) {
-            if (fiv.type == V4L2_FRMIVAL_TYPE_DISCRETE && fiv.discrete.denominator > 0) {
-                const double us = double(fiv.discrete.numerator) * 1e6
-                                  / double(fiv.discrete.denominator);
-                if (!any || us < bestUs) {
-                    bestUs = us;
-                    any = true;
+        const uint32_t cs = fmt.fmt.pix.colorspace;
+        uint32_t enc = fmt.fmt.pix.ycbcr_enc;
+        if (enc == V4L2_YCBCR_ENC_DEFAULT)
+            enc = V4L2_MAP_YCBCR_ENC_DEFAULT(cs);
+        uint32_t quant = fmt.fmt.pix.quantization;
+        if (quant == V4L2_QUANTIZATION_DEFAULT)
+            quant = V4L2_MAP_QUANTIZATION_DEFAULT(false, cs, enc);
+        m_color.matrix = enc == V4L2_YCBCR_ENC_709 ? device::ColorMatrix::Bt709
+                                                   : device::ColorMatrix::Bt601;
+        m_color.fullRange = quant == V4L2_QUANTIZATION_FULL_RANGE;
+    }
+
+    // The requested rate if the device offers it, else the nearest one (0: the
+    // fastest). 30 if the driver cannot list intervals.
+    {
+        const QList<int> rates = v4l2dev::offeredRates(m_fd, toFourcc(m_format), m_negotiated);
+        m_fps = 30;
+        if (!rates.isEmpty()) {
+            m_fps = rates.first();
+            if (m_requestedFps > 0) {
+                for (int r : rates) {
+                    if (std::abs(r - m_requestedFps) < std::abs(m_fps - m_requestedFps))
+                        m_fps = r;
                 }
             }
-            ++fiv.index;
         }
-        m_fps = any ? int(1e6 / bestUs + 0.5) : 30;
     }
 
     struct v4l2_streamparm parm;
@@ -253,8 +262,8 @@ void V4l2Capture::run()
         }
 
         const size_t used = buf.bytesused;
-        // A short YUYV frame (dropped USB packets) can't be converted: skip it.
-        const size_t rawSize = size_t(m_stride) * size_t(m_negotiated.height());
+        // A short raw frame (dropped USB packets) can't be converted: skip it.
+        const size_t rawSize = device::rawFrameBytes(m_format, m_stride, m_negotiated.height());
         // An MJPG buffer must hold a real JPEG: the dongle pads some modes with
         // empty 4-byte markers that are not frames.
         const bool complete = m_format == device::PixelFormat::Mjpg
@@ -271,7 +280,8 @@ void V4l2Capture::run()
             frame.width = m_negotiated.width();
             frame.height = m_negotiated.height();
             frame.stride = m_stride;
-            frame.data = m_pool.take(src, m_format == device::PixelFormat::Yuyv ? rawSize : used);
+            frame.color = m_color;
+            frame.data = m_pool.take(src, m_format == device::PixelFormat::Mjpg ? used : rawSize);
             m_stats->captured.fetch_add(1);
             m_queue->push(std::move(frame));
         }

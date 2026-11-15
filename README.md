@@ -1,41 +1,50 @@
 # QShadow
 
-Minimal-latency viewer for the **GENKI ShadowCast** USB capture dongle
-(`298f:1996`) on Linux (Wayland) and Windows 10/11.
+Minimal-latency viewer for USB video capture devices on Linux (Wayland) and
+Windows 10/11. Built for the **GENKI ShadowCast** HDMI capture dongle
+(`298f:1996`), and works with other UVC capture devices and webcams too.
 
-QShadow grabs the HDMI input of a ShadowCast, shows it in a window, and plays
-its audio through your computer's speakers — with as little added delay as
-possible.
+QShadow grabs the video input of a capture device, shows it in a window, and
+plays its audio through your computer's speakers — with as little added delay
+as possible.
 
 ## Features
 
-- **Automatic device detection** — finds the ShadowCast by its USB IDs, no
-  need to hardcode `/dev/videoN`.
+- **Any capture device** — every video capture device is listed in the
+  *Device* selector (your choice is remembered; if it is not plugged in, the
+  first device is used). The audio interface of the same USB device is paired
+  automatically. The ShadowCast is the tested device; others rely on what
+  their driver reports (see [Other devices](#other-devices)).
 - **Adapts to the input** — you pick the video mode that matches the source
   (e.g. 720p source → 1280×720), and the frame keeps its aspect ratio
   (letterboxed if the window doesn't match).
-- **MJPG or YUYV capture** — pick the *Format* in the toolbar. MJPG is the
-  dongle's compressed mode (up to 60 fps, but with JPEG compression artifacts);
-  YUYV is uncompressed and artifact-free, but USB 2.0 bandwidth limits it to
-  low resolutions (e.g. 720×480 @ 30 fps, 720×576 @ 25, 800×600 @ 20,
-  1280×720 @ 10) — ideal for retro / SD sources.
-- **Low latency pipeline** — MJPG capture → libjpeg-turbo decode on its own
-  thread → Vulkan blit. MJPG frames are decoded to planar YUV, and YUYV frames
-  are passed through untouched (zero-copy); both are converted to RGB by GPU
-  compute shaders, which skips the CPU colour conversion and halves the data
+- **Formats and frame rates** — pick the *Format*, *Resolution* and *Rate* in
+  the toolbar; each lists what the device offers. MJPG is compressed (high
+  resolutions and rates, with JPEG artifacts); the uncompressed formats
+  (YUYV, UYVY, NV12, RGB24/BGR24/BGRX) are artifact-free but limited by USB
+  bandwidth. On the ShadowCast, YUYV is limited by USB 2.0 to low resolutions
+  (e.g. 720×480 @ 30 fps, 720×576 @ 25, 800×600 @ 20, 1280×720 @ 10) — ideal
+  for retro / SD sources. Windows captures MJPG, YUY2, NV12 and UYVY.
+- **Low latency pipeline** — capture → decode on its own thread → Vulkan
+  blit. MJPG frames are decoded (libjpeg-turbo) to planar YUV, and full-range
+  BT.601 YUYV frames are passed through untouched (zero-copy); both are
+  converted to RGB by GPU compute shaders. Other formats and colour
+  interpretations (limited range, BT.709) are converted on the CPU, which skips the CPU colour conversion and halves the data
   uploaded (set `QSHADOW_CPU_CONVERT=1` to force the CPU path). Frames are dropped rather than queued when things get
   busy, and the audio buffer is kept short.
-- **Audio** captured from the dongle at native 96 kHz and resampled to the
-  host output. The resampling ratio is nudged by at most ±0.5% to absorb clock
-  drift between the dongle and the sound card, so the buffer stays short
-  without clicks or dropouts.
-- **Hotplug** — start QShadow before plugging in the dongle, or unplug and
+- **Audio** captured from the device at its native rate (96 kHz on the
+  ShadowCast; 44.1, 48 and other rates work) and resampled to the host output.
+  The *Audio* selector picks the device's own audio, none, or any other input.
+  The resampling ratio is nudged by at most ±0.5% to absorb clock drift
+  between the device and the sound card, so the buffer stays short without
+  clicks or dropouts. A device without audio runs video only.
+- **Hotplug** — start QShadow before plugging in the device, or unplug and
   replug it while running; the capture reconnects automatically.
 - **Live stats** — the status bar shows capture/decode rates, decode time,
   capture-to-render latency, audio buffer fill and drift correction.
 - **Remembers your settings** — window size, aspect-ratio toggle,
-  pixel format, selected resolution, volume, shader and downscale are restored on the next
-  launch.
+  device, pixel format, resolution, frame rate, audio source, volume, shader
+  and downscale are restored on the next launch.
 - **GPU sharpening & CRT shaders** — pick a post-processing shader from the
   toolbar: nearest-neighbor *None*, *Bilinear smooth*, the pixel-art upscalers
   **HQ4X** and **xBRZ**, the CRT emulators **CRT-Geom** and **CRT-Royale**, and
@@ -53,7 +62,7 @@ possible.
   driver (Mesa RADV/ANV/llvmpipe, Intel, NVIDIA, …)
 - `libjpeg-turbo`
 - `libasound2-dev` (ALSA)
-- A ShadowCast dongle connected by USB
+- A USB video capture device (a GENKI ShadowCast, another UVC capture card or a webcam)
 
 The shaders are compiled to SPIR-V at build time when `glslc` or
 `glslangValidator` is on `PATH`; otherwise the committed SPIR-V in
@@ -82,7 +91,7 @@ ctest --preset windows-release
 build-windows\Release\qshadow.exe
 ```
 
-Video uses Media Foundation (native MJPG/YUY2 passthrough, no converters) and
+Video uses Media Foundation (native MJPG/YUY2/NV12/UYVY passthrough, no converters) and
 audio uses WASAPI shared mode at the smallest engine period the driver
 allows. A Vulkan-capable GPU driver is needed; the Vulkan SDK is not.
 
@@ -95,7 +104,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-To run the unit tests (no dongle needed) or install system-wide:
+To run the unit tests (no capture device needed) or install system-wide:
 
 ```
 ctest --test-dir build --output-on-failure
@@ -168,10 +177,13 @@ under *Releases* with all four files.
 ./build/qshadow
 ```
 
-Make sure the ShadowCast is plugged in before you start it.
+Plug in the capture device before you start it, or any time while it runs.
 
 ## Using QShadow
 
+- **Device** — choose which capture device to show. The *Audio* selector
+  defaults to that device's own audio interface; pick *None* or another input
+  to change it.
 - **Resolution** — use the dropdown in the toolbar to select the video mode
   matching your input signal. 1080p sources: `1920×1080`; 720p sources:
   `1280×720`; retro/4:3 sources: `1024×768`, `800×600`, `640×480`, etc. The
@@ -203,9 +215,12 @@ Make sure the ShadowCast is plugged in before you start it.
 
 ## Troubleshooting
 
-- **“No ShadowCast capture dongle found”** — check it is plugged in and that
-  `lsusb` shows `298f:1996 MACROSILICON ShadowCast`. If the dongle was plugged
-  in after the app started, restart the app.
+- **“Waiting for a video capture device”** — check the device is plugged in
+  (`v4l2-ctl --list-devices` on Linux) and that your user may open
+  `/dev/video*` (the `video` group). Devices plugged in later are picked up
+  automatically.
+- **“no supported video format”** — the device offers only formats QShadow
+  cannot capture (for example H.264 only).
 - **No video** — make sure the HDMI source is powered on; the status bar shows
   the negotiated and per-frame resolution.
 - **No sound** — make sure the host output volume is up and the correct output
@@ -220,11 +235,28 @@ With the app running you can confirm the negotiated format:
 v4l2-ctl -d /dev/video0 --get-fmt-video
 ```
 
-The capture device is listed as a ShadowCast:
+List the capture devices and their formats:
 
 ```
 v4l2-ctl --list-devices
+v4l2-ctl -d /dev/video0 --list-formats-ext
 ```
+
+## Other devices
+
+The ShadowCast is the only device tested by the author. For any other device
+QShadow uses what the driver reports:
+
+- **Colours** — YCbCr formats are converted with the matrix (BT.601/709) and
+  range (full/limited) the driver declares. If a device's colours look wrong
+  (too dark or washed out), it probably declares them incorrectly; the
+  ShadowCast is such a case (its YUYV is full range although the driver says
+  limited) and is corrected by a small table in `src/devicequirks.h`. Reports
+  with the device name, `lsusb` ID and the symptom are welcome.
+- **Audio** — the format is negotiated with the sound card (S16, mono or
+  stereo, common rates). Devices without a sound interface run video only.
+- **Not supported** — H.264-only devices, and on Windows the uncompressed RGB
+  formats.
 
 ## License
 

@@ -4,54 +4,78 @@
 #include "alsa_audio.h"
 
 #include "alsa_capture_loop.h"
-#include "sysfs_usb.h"
 
 #include <alsa/asoundlib.h>
 
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
 namespace {
 
-constexpr int kCaptureRate = 96000;
-constexpr snd_pcm_uframes_t kPeriodFrames = 480; // 5 ms @ 96 kHz
-// The hardware buffer only has to survive a late read; it adds no latency because
-// every period is read as soon as it is ready. 80 ms (it was 20 ms) makes an
-// overrun, which loses data, far less likely when the machine is busy.
-constexpr snd_pcm_uframes_t kBufferFrames = kPeriodFrames * 16;
+// 5 ms periods. The hardware buffer only has to survive a late read; it adds no
+// latency because every period is read as soon as it is ready. 16 periods (80 ms)
+// make an overrun, which loses data, far less likely when the machine is busy.
+constexpr int kPeriodsPerSecond = 200;
+constexpr snd_pcm_uframes_t kBufferPeriods = 16;
+
+struct Format {
+    unsigned channels;
+    unsigned rate;
+};
+
+// Applies S16_LE interleaved with the given channels and exact rate, and the
+// period/buffer sizes. Returns the error from the first step that failed.
+int applyParams(snd_pcm_t *handle, snd_pcm_hw_params_t *params, const Format &f,
+                snd_pcm_uframes_t *period)
+{
+    snd_pcm_uframes_t buffer = *period * kBufferPeriods;
+    int err = snd_pcm_hw_params_any(handle, params);
+    if (err == 0) err = snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    if (err == 0) err = snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S16_LE);
+    if (err == 0) err = snd_pcm_hw_params_set_channels(handle, params, f.channels);
+    if (err == 0) err = snd_pcm_hw_params_set_rate(handle, params, f.rate, 0);
+    if (err == 0) err = snd_pcm_hw_params_set_period_size_near(handle, params, period, nullptr);
+    if (err == 0) err = snd_pcm_hw_params_set_buffer_size_near(handle, params, &buffer);
+    if (err == 0) err = snd_pcm_hw_params(handle, params);
+    return err;
+}
+
+// Tries the formats in order of preference: what the hardware does natively, mono
+// before stereo (the pipeline downmixes anyway), 96 kHz (the ShadowCast) and 48 kHz
+// before the rarer rates. Leaves `handle` configured and returns the format, or
+// returns false with *error set.
+bool negotiate(snd_pcm_t *handle, bool plug, Format *chosen, snd_pcm_uframes_t *period,
+               QString *error)
+{
+    snd_pcm_hw_params_t *params;
+    snd_pcm_hw_params_alloca(&params);
+
+    // Through the plug layer ALSA converts anything, so one request is enough.
+    static const unsigned kRates[] = {96000, 48000, 192000, 44100, 88200, 32000};
+    static const unsigned kPlugRates[] = {48000};
+    int err = -EINVAL;
+    for (unsigned channels : {1u, 2u}) {
+        for (unsigned rate : plug ? std::vector<unsigned>(std::begin(kPlugRates), std::end(kPlugRates))
+                                  : std::vector<unsigned>(std::begin(kRates), std::end(kRates))) {
+            *chosen = Format{channels, rate};
+            *period = snd_pcm_uframes_t(rate / kPeriodsPerSecond);
+            err = applyParams(handle, params, *chosen, period);
+            if (err == 0)
+                return true;
+        }
+    }
+    *error = QStringLiteral("snd_pcm_hw_params: %1").arg(snd_strerror(err));
+    return false;
+}
 
 } // namespace
 
-namespace alsa {
-
-int findCard()
-{
-    // Identify the card by the USB IDs, like the video node; fall back to the
-    // ALSA card name only if sysfs does not give an answer.
-    const int byUsb = sysfs_usb::findSoundCard(device::kUsbVendorId, device::kUsbProductId);
-    if (byUsb >= 0)
-        return byUsb;
-
-    int card = -1;
-    while (snd_card_next(&card) == 0 && card >= 0) {
-        char *name = nullptr;
-        if (snd_card_get_name(card, &name) == 0) {
-            const bool match = std::strstr(name, "ShadowCast") != nullptr;
-            free(name);
-            if (match)
-                return card;
-        }
-    }
-    return -1;
-}
-
-} // namespace alsa
-
 AlsaAudioInput::AlsaAudioInput(int cardIndex, AudioRing *ring, Stats *stats)
-    : m_card(cardIndex), m_ring(ring), m_stats(stats), m_pipeline(ring, kCaptureRate, 1)
+    : m_card(cardIndex), m_ring(ring), m_stats(stats)
 {
 }
 
@@ -64,43 +88,37 @@ AlsaAudioInput::~AlsaAudioInput()
 bool AlsaAudioInput::start()
 {
     if (m_card < 0) {
-        m_error = QStringLiteral("ShadowCast audio card not found");
+        m_error = QStringLiteral("Audio card not found");
         return false;
     }
 
-    const QString hw = QStringLiteral("hw:%1,0").arg(m_card);
+    // The hardware directly (exact, no conversion) first; the plug layer only if
+    // the card offers no S16 mono/stereo at a rate we know.
+    Format format{1, 48000};
+    snd_pcm_uframes_t period = 0;
     snd_pcm_t *handle = nullptr;
-    if (snd_pcm_open(&handle, hw.toLocal8Bit().constData(),
-                     SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK) < 0) {
-        m_error = QStringLiteral("snd_pcm_open(%1) failed").arg(hw);
+    QString failure;
+    for (bool plug : {false, true}) {
+        const QString name = QStringLiteral("%1:%2,0").arg(plug ? "plughw" : "hw").arg(m_card);
+        if (snd_pcm_open(&handle, name.toLocal8Bit().constData(), SND_PCM_STREAM_CAPTURE,
+                         SND_PCM_NONBLOCK) < 0) {
+            failure = QStringLiteral("snd_pcm_open(%1) failed").arg(name);
+            handle = nullptr;
+            break; // a card that does not open directly will not open through plug
+        }
+        if (negotiate(handle, plug, &format, &period, &failure))
+            break;
+        snd_pcm_close(handle);
+        handle = nullptr;
+    }
+    if (!handle) {
+        m_error = failure;
         return false;
     }
     m_handle = handle;
-
-    snd_pcm_hw_params_t *params;
-    snd_pcm_hw_params_alloca(&params);
-
-    snd_pcm_uframes_t period = kPeriodFrames;
-    snd_pcm_uframes_t buffer = kBufferFrames;
-
-    int err = snd_pcm_hw_params_any(handle, params);
-    if (err == 0) err = snd_pcm_hw_params_set_access(handle, params,
-                                                     SND_PCM_ACCESS_RW_INTERLEAVED);
-    if (err == 0) err = snd_pcm_hw_params_set_format(handle, params,
-                                                     SND_PCM_FORMAT_S16_LE);
-    if (err == 0) err = snd_pcm_hw_params_set_channels(handle, params, 1);
-    if (err == 0) err = snd_pcm_hw_params_set_rate(handle, params, kCaptureRate, 0);
-    if (err == 0) err = snd_pcm_hw_params_set_period_size_near(handle, params,
-                                                               &period, nullptr);
-    if (err == 0) err = snd_pcm_hw_params_set_buffer_size_near(handle, params,
-                                                               &buffer);
-    if (err == 0) err = snd_pcm_hw_params(handle, params);
-    if (err < 0) {
-        m_error = QStringLiteral("snd_pcm_hw_params: %1").arg(snd_strerror(err));
-        snd_pcm_close(handle);
-        m_handle = nullptr;
-        return false;
-    }
+    m_channels = format.channels;
+    m_periodFrames = size_t(period);
+    m_pipeline = std::make_unique<AudioPipeline>(m_ring, int(format.rate), int(format.channels));
 
     // The stream is started by the read loop (it starts any stopped stream).
     m_stats->audioUnderruns.store(0);
@@ -141,9 +159,9 @@ void AlsaAudioInput::run()
 
     std::string error;
     const bool ok = alsaloop::run(
-        pcm, kPeriodFrames, m_stop,
-        [this](const int16_t *frames, size_t n) { m_pipeline.process(frames, n); }, &m_xruns,
-        &error);
+        pcm, m_periodFrames, m_stop,
+        [this](const int16_t *frames, size_t n) { m_pipeline->process(frames, n); }, &m_xruns,
+        &error, m_channels);
     if (!ok)
         m_error = QString::fromStdString(error);
 }

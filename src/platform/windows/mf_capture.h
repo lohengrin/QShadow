@@ -22,7 +22,7 @@ class MfReaderCallback;
 class MfCapture : public CaptureSource {
 public:
     MfCapture(const QString &symbolicLink, const QSize &targetSize,
-              device::PixelFormat format, Stats *stats);
+              device::PixelFormat format, int fps, Stats *stats);
     ~MfCapture() override;
 
     bool start(FrameQueue *out) override;
@@ -44,6 +44,8 @@ private:
     QString m_link;
     QSize m_targetSize;
     device::PixelFormat m_format;
+    int m_requestedFps; // 0: the highest the device offers
+    device::ColorInfo m_color;
     Stats *m_stats;
     FrameQueue *m_queue = nullptr;
     bool m_quiet = false;

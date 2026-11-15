@@ -11,6 +11,7 @@
 #include <mfreadwrite.h>
 
 #include <algorithm>
+#include <functional>
 
 namespace mfdev {
 
@@ -41,34 +42,46 @@ QString stringAttr(IMFActivate *activate, const GUID &key)
 
 } // namespace
 
+// GUID_NULL for formats the Windows backend does not capture (the uncompressed
+// RGB types are bottom-up DIBs with negative strides; not handled yet).
 GUID subtypeFor(device::PixelFormat format)
 {
-    return format == device::PixelFormat::Yuyv ? MFVideoFormat_YUY2 : MFVideoFormat_MJPG;
+    switch (format) {
+    case device::PixelFormat::Mjpg: return MFVideoFormat_MJPG;
+    case device::PixelFormat::Yuyv: return MFVideoFormat_YUY2;
+    case device::PixelFormat::Nv12: return MFVideoFormat_NV12;
+    case device::PixelFormat::Uyvy: return MFVideoFormat_UYVY;
+    default: break;
+    }
+    return GUID_NULL;
 }
 
-QString findVideo()
+QList<Video> listVideo()
 {
+    QList<Video> result;
     wincom::MfRuntime mf;
     if (!mf.ok())
-        return {};
+        return result;
 
     ComPtr<IMFAttributes> attrs;
     if (FAILED(MFCreateAttributes(&attrs, 1))
         || FAILED(attrs->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
                                  MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID)))
-        return {};
+        return result;
 
     ActivateList list;
     if (FAILED(MFEnumDeviceSources(attrs.Get(), &list.items, &list.count)))
-        return {};
+        return result;
 
     for (UINT32 i = 0; i < list.count; ++i) {
-        const QString link = stringAttr(
+        Video video;
+        video.link = stringAttr(
             list.items[i], MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK);
-        if (wincom::isShadowCastPath(link))
-            return link;
+        video.name = stringAttr(list.items[i], MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
+        if (!video.link.isEmpty())
+            result.append(video);
     }
-    return {};
+    return result;
 }
 
 HRESULT createSource(const QString &symbolicLink, IMFMediaSource **source)
@@ -106,6 +119,11 @@ QList<device::Mode> enumerateModes(const QString &videoId, device::PixelFormat f
     }
 
     const GUID wanted = subtypeFor(format);
+    if (wanted == GUID_NULL) {
+        reader.Reset();
+        source->Shutdown();
+        return modes;
+    }
     for (DWORD i = 0;; ++i) {
         ComPtr<IMFMediaType> type;
         const HRESULT hr = reader->GetNativeMediaType(wincom::kFirstVideoStream, i, &type);
@@ -123,10 +141,17 @@ QList<device::Mode> enumerateModes(const QString &videoId, device::PixelFormat f
         const QSize sz = QSize(int(w), int(h));
         auto it = std::find_if(modes.begin(), modes.end(),
                                [&](const device::Mode &m) { return m.size == sz; });
-        if (it == modes.end())
-            modes.append(device::Mode{sz, fps});
-        else
-            it->fps = std::max(it->fps, fps);
+        if (it == modes.end()) {
+            device::Mode mode;
+            mode.size = sz;
+            it = modes.insert(modes.end(), mode);
+        }
+        if (fps > 0 && !it->rates.contains(fps))
+            it->rates.append(fps);
+    }
+    for (device::Mode &mode : modes) {
+        std::sort(mode.rates.begin(), mode.rates.end(), std::greater<int>());
+        mode.fps = mode.rates.isEmpty() ? 0 : mode.rates.first();
     }
 
     reader.Reset();

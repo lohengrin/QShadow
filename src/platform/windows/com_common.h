@@ -53,8 +53,8 @@ private:
 
 QString hresultText(HRESULT hr);
 
-// True if `id` contains the ShadowCast's USB vendor/product ID in the form
-// Windows uses in device paths ("vid_298f&pid_1996"), case-insensitively.
-bool isShadowCastPath(const QString &id);
+// Extracts the USB vendor/product ID from a device path or id ("...vid_298f&pid_1996...").
+// False (and vid/pid untouched) if it has none.
+bool parseVidPid(const QString &id, int *vid, int *pid);
 
 } // namespace wincom

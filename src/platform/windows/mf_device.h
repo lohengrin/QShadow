@@ -12,9 +12,13 @@
 
 namespace mfdev {
 
-// Symbolic link of the ShadowCast's video capture interface, found by USB
-// vendor/product ID. Empty if the dongle is not present.
-QString findVideo();
+struct Video {
+    QString link; // symbolic link, the opaque device id
+    QString name; // friendly name
+};
+
+// Every video capture device Media Foundation knows.
+QList<Video> listVideo();
 
 // The video-capture IMFMediaSource for a symbolic link (nullptr on failure).
 // MFStartup must be active.

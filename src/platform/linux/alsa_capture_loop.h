@@ -14,6 +14,7 @@
 // audio is silently dead until the app restarts. So the loop starts the stream
 // whenever it finds it stopped.
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -35,11 +36,13 @@ struct Pcm {
 // Reads periods of `periodFrames` and hands them to `onFrames` until `stop` is
 // set (returns true) or an error cannot be recovered (returns false, *error set).
 // Overruns/suspends are counted in *xruns and recovered from.
+// `channels` is the interleaving of the samples: `read` fills up to
+// periodFrames * channels values and returns frames.
 inline bool run(const Pcm &pcm, size_t periodFrames, const std::atomic<bool> &stop,
                 const std::function<void(const int16_t *, size_t)> &onFrames,
-                std::atomic<uint64_t> *xruns, std::string *error)
+                std::atomic<uint64_t> *xruns, std::string *error, size_t channels = 1)
 {
-    std::vector<int16_t> buf(periodFrames);
+    std::vector<int16_t> buf(periodFrames * std::max<size_t>(1, channels));
 
     // -EPIPE is an overrun and -ESTRPIPE a system suspend; -EAGAIN (non-blocking
     // read with nothing ready) is not a fault.

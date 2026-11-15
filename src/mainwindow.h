@@ -39,8 +39,11 @@ protected:
 
 private slots:
     void checkDevice();
+    void onDeviceChanged(int index);
+    void onAudioChanged(int index);
     void onFormatChanged(int index);
     void onResolutionChanged(int index);
+    void onRateChanged(int index);
     void updateStatus();
     void toggleFullscreen();
     void fitToPipeline();
@@ -48,10 +51,17 @@ private slots:
 
 private:
     void buildUi();
-    // Looks the dongle up and (re)fills the format/resolution lists, keeping the
-    // user's preferred selection. Returns false while no usable device exists.
+    // Lists the capture devices, selects the preferred one (else the first) and
+    // (re)fills the format/resolution lists, keeping the user's preferred
+    // selection. Returns false while no usable device exists.
     bool connectDevice();
+    // Refills the audio source list (paired / none / every input) and resolves
+    // m_audioId from the user's choice.
+    void updateAudioSources();
     void populateResolutions(const QSize &preferred);
+    // Frame rates of the selected format and resolution; prefers `preferred`
+    // (0 = the highest).
+    void populateRates(int preferred);
     void loadSettings();
     void saveSettings();
     // Whole pipeline (video + audio) vs video only: a format/resolution change
@@ -63,22 +73,34 @@ private:
     void startAudio();
     void stopAudio();
 
-    QString m_devicePath;
+    QString m_devicePath; // video id of the selected device, empty if none usable
+    QString m_idleStatus = QStringLiteral("Waiting for a video capture device…"); // why nothing is running, shown while m_devicePath is empty
+    QList<platform::DeviceInfo> m_devices;
+    QString m_prefDevice; // DeviceInfo::key() of the user's choice, kept across unplug
     // The user's last choice, kept across unplug/replug and sessions even if the
     // current device does not offer it.
     int m_prefFormat = int(device::PixelFormat::Mjpg);
     QSize m_prefSize;
+    int m_prefFps = 0; // 0: the highest the mode offers
     bool m_captureFailing = false; // log a persistent start failure only once
     QHash<int, QList<device::Mode>> m_sizes; // keyed by device::PixelFormat
-    QString m_audioId; // backend-defined identifier of the dongle's audio interface
+    int m_vid = 0; // USB ids of the selected device (quirks lookup)
+    int m_pid = 0;
+    QString m_pairedAudioId; // the selected device's own audio interface, may be empty
+    QString m_prefAudio = QStringLiteral("auto"); // "auto", "none" or "in:<input name>"
+    QList<platform::AudioInputInfo> m_audioInputs;
+    QString m_audioId; // backend-defined identifier of the device's audio interface, may be empty
 
     QVulkanInstance *m_vulkanInstance = nullptr;
     VideoWidget *m_video = nullptr;
     QToolBar *m_toolbar = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
+    QComboBox *m_deviceCombo = nullptr;
+    QComboBox *m_audioCombo = nullptr;
     QComboBox *m_formatCombo = nullptr;
     QComboBox *m_resCombo = nullptr;
+    QComboBox *m_rateCombo = nullptr;
     QComboBox *m_shaderCombo = nullptr;
     QComboBox *m_downscaleCombo = nullptr;
     QCheckBox *m_aspectCheck = nullptr;

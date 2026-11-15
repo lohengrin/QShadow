@@ -110,8 +110,9 @@ std::chrono::steady_clock::time_point sampleStamp(LONGLONG sampleTime)
 } // namespace
 
 MfCapture::MfCapture(const QString &symbolicLink, const QSize &targetSize,
-                     device::PixelFormat format, Stats *stats)
-    : m_link(symbolicLink), m_targetSize(targetSize), m_format(format), m_stats(stats)
+                     device::PixelFormat format, int fps, Stats *stats)
+    : m_link(symbolicLink), m_targetSize(targetSize), m_format(format),
+      m_requestedFps(fps), m_stats(stats)
 {
 }
 
@@ -130,11 +131,13 @@ QDebug MfCapture::warn()
     return qWarning();
 }
 
-// Picks the native type of the requested format and size with the highest rate.
+// Picks the native type of the requested format and size: the requested rate
+// if offered, else the nearest one (0: the highest).
 bool MfCapture::selectType(IMFMediaType **chosen)
 {
     const GUID wanted = mfdev::subtypeFor(m_format);
     double bestFps = -1.0;
+    const double want = m_requestedFps > 0 ? double(m_requestedFps) : 1e9;
     for (DWORD i = 0;; ++i) {
         ComPtr<IMFMediaType> type;
         if (FAILED(m_reader->GetNativeMediaType(wincom::kFirstVideoStream, i, &type)))
@@ -147,7 +150,7 @@ bool MfCapture::selectType(IMFMediaType **chosen)
             continue;
         MFGetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, &num, &den);
         const double fps = den ? double(num) / double(den) : 0.0;
-        if (fps > bestFps) {
+        if (bestFps < 0.0 || std::abs(fps - want) < std::abs(bestFps - want)) {
             if (*chosen)
                 (*chosen)->Release();
             bestFps = fps;
@@ -203,14 +206,29 @@ bool MfCapture::start(FrameQueue *out)
         return false;
     }
 
-    if (m_format == device::PixelFormat::Yuyv) {
+    if (m_format != device::PixelFormat::Mjpg) {
         UINT32 s = 0;
         int stride = 0;
         if (SUCCEEDED(type->GetUINT32(MF_MT_DEFAULT_STRIDE, &s)))
             stride = std::abs(int(s));
-        m_stride = std::max(stride, m_negotiated.width() * 2);
+        m_stride = std::max(stride, device::minStride(m_format, m_negotiated.width()));
     } else {
         m_stride = 0;
+    }
+
+    // Colour encoding as the device declares it; when it says nothing, Media
+    // Foundation's own convention: limited range, BT.601 below 720 lines.
+    {
+        UINT32 matrix = 0, range = 0;
+        type->GetUINT32(MF_MT_YUV_MATRIX, &matrix);
+        type->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &range);
+        const bool hd = m_negotiated.height() >= 720;
+        m_color.matrix = matrix == MFVideoTransferMatrix_BT709
+                             ? device::ColorMatrix::Bt709
+                             : (matrix == MFVideoTransferMatrix_BT601 || !hd
+                                    ? device::ColorMatrix::Bt601
+                                    : device::ColorMatrix::Bt709);
+        m_color.fullRange = range == MFNominalRange_0_255;
     }
 
     // The largest frame a pooled buffer will hold.
@@ -257,8 +275,8 @@ bool MfCapture::onSample(HRESULT status, DWORD streamFlags, LONGLONG sampleTime,
     if (FAILED(buffer->Lock(&data, nullptr, &length)))
         return true;
 
-    const size_t rawSize = size_t(m_stride) * size_t(m_negotiated.height());
-    // A short YUYV frame (dropped USB packets) can't be converted: skip it.
+    const size_t rawSize = device::rawFrameBytes(m_format, m_stride, m_negotiated.height());
+    // A short raw frame (dropped USB packets) can't be converted: skip it.
     // The dongle also sends empty JPEGs (just SOI+EOI, 4 bytes) between real
     // frames; they carry no image and would only queue ahead of the next frame.
     const bool complete = m_format == device::PixelFormat::Mjpg ? length > kMinJpegBytes
@@ -270,8 +288,9 @@ bool MfCapture::onSample(HRESULT status, DWORD streamFlags, LONGLONG sampleTime,
         frame.width = m_negotiated.width();
         frame.height = m_negotiated.height();
         frame.stride = m_stride;
+        frame.color = m_color;
         frame.data = m_pool.take(reinterpret_cast<const char *>(data),
-                                 m_format == device::PixelFormat::Yuyv ? rawSize : length);
+                                 m_format == device::PixelFormat::Mjpg ? length : rawSize);
         m_stats->captured.fetch_add(1);
         m_queue->push(std::move(frame));
     }
