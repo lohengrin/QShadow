@@ -18,8 +18,9 @@ as possible.
 - **Adapts to the input** — you pick the video mode that matches the source
   (e.g. 720p source → 1280×720), and the frame keeps its aspect ratio
   (letterboxed if the window doesn't match).
-- **Formats and frame rates** — pick the *Mode* in the toolbar (resolution,
-  frame rate and pixel format in one list of what the device offers). MJPG is compressed (high
+- **Formats and frame rates** — pick the *Resolution* (and the pixel *Format*,
+  shown when the device offers several) in the toolbar; the *Frame rate* is in
+  the Options menu. Each lists what the device offers. MJPG is compressed (high
   resolutions and rates, with JPEG artifacts); the uncompressed formats
   (YUYV, UYVY, NV12, RGB24/BGR24/BGRX) are artifact-free but limited by USB
   bandwidth. On the ShadowCast, YUYV is limited by USB 2.0 to low resolutions
@@ -40,10 +41,10 @@ as possible.
   clicks or dropouts. A device without audio runs video only.
 - **Hotplug** — start QShadow before plugging in the device, or unplug and
   replug it while running; the capture reconnects automatically.
-- **Compact toolbar and live stats** — the toolbar only holds Device, Mode,
-  Shader, volume, Fit and Fullscreen, plus an *Options* menu (the same entries
-  as the right-click menu) for aspect ratio, audio source and downscale. The
-  status bar shows the device, mode and audio state on the left and capture
+- **Compact toolbar and live stats** — the toolbar only holds Device, Resolution,
+  Format, Shader, volume, Fit and Fullscreen, plus an *Options* menu (the same entries
+  as the right-click menu) for frame rate, aspect ratio, audio source and downscale. The
+  status bar shows the device, frame size, format and audio state on the left and capture
   rate, decode time, latency and audio buffer on the right; hover for the
   full numbers. Problems (no frames, dropped frames, audio underruns) show up
   as a red warning only while they happen.
@@ -189,14 +190,17 @@ Plug in the capture device before you start it, or any time while it runs.
 - **Device** — choose which capture device to show. *Audio source* (in the
   Options menu, or by right-clicking the video) defaults to that device's own
   audio interface; pick *None* or another input to change it.
-- **Mode** — use the dropdown in the toolbar to select the video mode
-  matching your input signal. 1080p sources: `1920×1080`; 720p sources:
+- **Resolution, Format, Frame rate** — use the Resolution dropdown in the
+  toolbar to select the video mode matching your input signal. Each entry shows
+  the frame rate it will run at; the *Format* box appears when the device
+  offers several pixel formats, and *Frame rate* is in the Options menu (when
+  the size offers more than one rate). 1080p sources: `1920×1080`; 720p sources:
   `1280×720`; retro/4:3 sources: `1024×768`, `800×600`, `640×480`, etc. The
   status bar reports what the device actually negotiated and what each frame
   measures.
 - **Options menu** — the button at the right end of the toolbar (also the
   right-click menu on the video) holds *Preserve aspect*, *Audio source*,
-  *Downscale* and the other settings.
+  *Frame rate*, *Downscale* and the other settings.
 - **Aspect ratio** — toggle *Preserve aspect* in the Options menu. When on, the picture is fitted
   inside the window with black bars so it never gets stretched. When off, it
   fills the whole window.

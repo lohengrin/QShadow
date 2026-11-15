@@ -184,7 +184,7 @@ private slots:
         });
         QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
 
-        for (const char *expected : {"Preserve aspect", "Device", "Mode",
+        for (const char *expected : {"Preserve aspect", "Device", "Resolution",
                                      "Audio source", "Shader",
                                      "Downscale", "Volume", "Fit window to video"})
             QVERIFY2(top.contains(QLatin1String(expected)), expected);
@@ -211,8 +211,8 @@ private slots:
         auto *toolbar = w.findChild<QToolBar *>();
         QVERIFY(toolbar);
 
-        // Three combo boxes (device, mode, shader) and no text labels.
-        QCOMPARE(toolbar->findChildren<QComboBox *>().size(), 3);
+        // Four combo boxes (device, resolution, format, shader), no text labels.
+        QCOMPARE(toolbar->findChildren<QComboBox *>().size(), 4);
         QVERIFY(toolbar->findChildren<QLabel *>().size() <= 1); // the volume icon
 
         QToolButton *options = nullptr;

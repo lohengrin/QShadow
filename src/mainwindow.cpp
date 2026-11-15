@@ -106,14 +106,21 @@ void MainWindow::buildUi()
     m_deviceCombo->setToolTip(QStringLiteral("Video capture device"));
     toolbar->addWidget(m_deviceCombo);
 
-    m_modeCombo = new QComboBox(toolbar);
-    fixedWidth(m_modeCombo, 24);
-    m_modeCombo->setToolTip(QStringLiteral(
-        "Capture mode: resolution, frame rate and pixel format.\n"
-        "MJPG: compressed, high rates but with JPEG artifacts.\n"
+    m_sizeCombo = new QComboBox(toolbar);
+    fixedWidth(m_sizeCombo, 18);
+    m_sizeCombo->setToolTip(QStringLiteral(
+        "Resolution (and the frame rate it will run at; change the rate in the "
+        "Options menu)"));
+    toolbar->addWidget(m_sizeCombo);
+
+    m_formatCombo = new QComboBox(toolbar);
+    fixedWidth(m_formatCombo, 5);
+    m_formatCombo->setToolTip(QStringLiteral(
+        "Pixel format. MJPG: compressed, high rates but with JPEG artifacts.\n"
         "Uncompressed formats (YUYV, NV12, ...): artifact-free, but limited by "
         "USB bandwidth to lower resolutions / frame rates."));
-    toolbar->addWidget(m_modeCombo);
+    m_formatAction = toolbar->addWidget(m_formatCombo);
+    m_formatAction->setVisible(false); // only when the device offers several
 
     m_shaderCombo = new QComboBox(toolbar);
     fixedWidth(m_shaderCombo, 14);
@@ -151,6 +158,8 @@ void MainWindow::buildUi()
     m_downscaleCombo->hide();
     m_audioCombo = new QComboBox(this);
     m_audioCombo->hide();
+    m_rateCombo = new QComboBox(this);
+    m_rateCombo->hide();
 
     toolbar->addSeparator();
     auto *volumeIcon = new QLabel(toolbar);
@@ -224,7 +233,9 @@ void MainWindow::buildUi()
     });
     connect(m_deviceCombo, &QComboBox::activated, this, &MainWindow::onDeviceChanged);
     connect(m_audioCombo, &QComboBox::activated, this, &MainWindow::onAudioChanged);
-    connect(m_modeCombo, &QComboBox::activated, this, &MainWindow::onModeChanged);
+    connect(m_sizeCombo, &QComboBox::activated, this, &MainWindow::onSizeChanged);
+    connect(m_formatCombo, &QComboBox::activated, this, &MainWindow::onFormatChanged);
+    connect(m_rateCombo, &QComboBox::activated, this, &MainWindow::onRateChanged);
     connect(m_shaderCombo, qOverload<int>(&QComboBox::activated), this,
             [this](int index) {
                 m_video->setShaderMode(VideoWidget::ShaderMode(
@@ -310,7 +321,11 @@ void MainWindow::populateMenu(QMenu *menu)
         }
     };
     comboMenu(QStringLiteral("Device"), m_deviceCombo);
-    comboMenu(QStringLiteral("Mode"), m_modeCombo);
+    comboMenu(QStringLiteral("Resolution"), m_sizeCombo);
+    if (m_formatCombo->count() > 1)
+        comboMenu(QStringLiteral("Format"), m_formatCombo);
+    if (m_rateCombo->count() > 1)
+        comboMenu(QStringLiteral("Frame rate"), m_rateCombo);
     comboMenu(QStringLiteral("Audio source"), m_audioCombo);
     comboMenu(QStringLiteral("Shader"), m_shaderCombo);
     comboMenu(QStringLiteral("Downscale"), m_downscaleCombo);
@@ -443,7 +458,7 @@ bool MainWindow::connectDevice()
 
     // Only touch the toolbar when something changed, so an open drop-down is
     // not yanked away by the periodic retry.
-    if (path != m_devicePath || sizes != m_sizes || m_modeCombo->count() == 0) {
+    if (path != m_devicePath || sizes != m_sizes || m_sizeCombo->count() == 0) {
         m_devicePath = path;
         m_sizes = sizes;
         populateModes();
@@ -495,68 +510,100 @@ void MainWindow::updateAudioSources()
     }
 }
 
-void MainWindow::populateModes()
+namespace {
+
+// The rate a mode will run at: the one nearest to the preferred rate (0: the
+// highest, which is listed first).
+int pickRate(const QList<int> &rates, int preferred)
 {
-    const QSignalBlocker blocker(m_modeCombo);
-    m_modeCombo->clear();
-    // Grouped by format, then largest size first, then highest rate first.
-    for (auto format : device::kAllFormats) {
-        for (const device::Mode &mode : m_sizes.value(int(format))) {
-            const QList<int> rates = mode.rates.isEmpty() ? QList<int>{mode.fps} : mode.rates;
-            for (int rate : rates) {
-                QString text = QStringLiteral("%1×%2").arg(mode.size.width()).arg(mode.size.height());
-                if (rate > 0)
-                    text += QStringLiteral(" · %1 fps").arg(rate);
-                text += QStringLiteral(" · ") + QLatin1String(device::formatName(format));
-                m_modeCombo->addItem(text, QVariantList{int(format), mode.size, rate});
-            }
+    if (rates.isEmpty())
+        return 0;
+    int best = rates.first();
+    if (preferred > 0) {
+        for (int r : rates) {
+            if (std::abs(r - preferred) < std::abs(best - preferred))
+                best = r;
         }
     }
+    return best;
+}
 
-    // The preferred format if offered, else the first one; in it the preferred
-    // size if offered, else the largest; in it the nearest rate (0: the highest).
-    const auto field = [&](int i) { return m_modeCombo->itemData(i).toList(); };
-    const int n = m_modeCombo->count();
-    if (n == 0)
-        return;
-    int format = field(0).at(0).toInt();
-    for (int i = 0; i < n; ++i) {
-        if (field(i).at(0).toInt() == m_prefFormat)
-            format = m_prefFormat;
-    }
-    QSize size;
-    for (int i = 0; i < n && !size.isValid(); ++i) {
-        if (field(i).at(0).toInt() == format)
-            size = field(i).at(1).toSize(); // the largest of the format
-    }
-    for (int i = 0; i < n; ++i) {
-        if (field(i).at(0).toInt() == format && field(i).at(1).toSize() == m_prefSize)
-            size = m_prefSize;
-    }
-    int best = -1;
-    for (int i = 0; i < n; ++i) {
-        const QVariantList f = field(i);
-        if (f.at(0).toInt() != format || f.at(1).toSize() != size)
-            continue;
-        if (best < 0 || (m_prefFps > 0 && std::abs(f.at(2).toInt() - m_prefFps)
-                                              < std::abs(field(best).at(2).toInt() - m_prefFps)))
-            best = i;
-    }
-    m_modeCombo->setCurrentIndex(std::max(best, 0));
+QList<int> ratesOf(const device::Mode &mode)
+{
+    return mode.rates.isEmpty() && mode.fps > 0 ? QList<int>{mode.fps} : mode.rates;
+}
 
-    // The popup lists the full labels even though the combo itself is compact.
-    m_modeCombo->view()->setMinimumWidth(m_modeCombo->view()->sizeHintForColumn(0) + 24);
+} // namespace
+
+void MainWindow::populateModes()
+{
+    {
+        const QSignalBlocker blocker(m_formatCombo);
+        m_formatCombo->clear();
+        for (auto format : device::kAllFormats) {
+            if (m_sizes.contains(int(format)))
+                m_formatCombo->addItem(QLatin1String(device::formatName(format)), int(format));
+        }
+        const int idx = m_formatCombo->findData(m_prefFormat);
+        if (idx >= 0)
+            m_formatCombo->setCurrentIndex(idx);
+    }
+    // A format box is only worth the toolbar space when there is a choice.
+    m_formatAction->setVisible(m_formatCombo->count() > 1);
+    populateSizes();
+}
+
+void MainWindow::populateSizes()
+{
+    const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
+    {
+        const QSignalBlocker blocker(m_sizeCombo);
+        m_sizeCombo->clear();
+        for (const device::Mode &mode : m_sizes.value(int(format))) {
+            QString text = QStringLiteral("%1×%2").arg(mode.size.width()).arg(mode.size.height());
+            // The rate this size will run at if picked.
+            if (const int rate = pickRate(ratesOf(mode), m_prefFps))
+                text += QStringLiteral(" · %1 fps").arg(rate);
+            m_sizeCombo->addItem(text, mode.size);
+        }
+        const int idx = m_sizeCombo->findData(m_prefSize);
+        if (idx >= 0)
+            m_sizeCombo->setCurrentIndex(idx);
+        // The list shows the full labels even though the box is compact.
+        m_sizeCombo->view()->setMinimumWidth(m_sizeCombo->view()->sizeHintForColumn(0) + 24);
+    }
+    populateRates();
+}
+
+void MainWindow::populateRates()
+{
+    const auto format = device::PixelFormat(m_formatCombo->currentData().toInt());
+    const QSize size = m_sizeCombo->currentData().toSize();
+    QList<int> rates;
+    for (const device::Mode &mode : m_sizes.value(int(format))) {
+        if (mode.size == size) {
+            rates = ratesOf(mode);
+            break;
+        }
+    }
+    const QSignalBlocker blocker(m_rateCombo);
+    m_rateCombo->clear();
+    for (int r : std::as_const(rates))
+        m_rateCombo->addItem(QStringLiteral("%1 fps").arg(r), r);
+    if (rates.isEmpty())
+        m_rateCombo->addItem(QStringLiteral("Auto"), 0);
+    else
+        m_rateCombo->setCurrentIndex(int(rates.indexOf(pickRate(rates, m_prefFps))));
 }
 
 MainWindow::CurrentMode MainWindow::currentMode() const
 {
     CurrentMode mode;
-    const QVariantList f = m_modeCombo->currentData().toList();
-    if (f.size() == 3) {
-        mode.format = device::PixelFormat(f.at(0).toInt());
-        mode.size = f.at(1).toSize();
-        mode.fps = f.at(2).toInt();
-    }
+    if (m_formatCombo->count() == 0 || m_sizeCombo->count() == 0)
+        return mode;
+    mode.format = device::PixelFormat(m_formatCombo->currentData().toInt());
+    mode.size = m_sizeCombo->currentData().toSize();
+    mode.fps = m_rateCombo->currentData().toInt();
     return mode;
 }
 
@@ -744,14 +791,42 @@ void MainWindow::onAudioChanged(int index)
         startAudio();
 }
 
-void MainWindow::onModeChanged(int index)
+void MainWindow::onFormatChanged(int index)
 {
     if (index < 0)
         return;
-    const CurrentMode mode = currentMode();
-    m_prefFormat = int(mode.format);
-    m_prefSize = mode.size;
-    m_prefFps = mode.fps;
+    m_prefFormat = m_formatCombo->currentData().toInt();
+    // Keep the current size if the new format offers it, else its largest.
+    m_prefSize = m_sizeCombo->currentData().toSize();
+    populateSizes();
+    m_prefSize = m_sizeCombo->currentData().toSize();
+    m_prefFps = m_rateCombo->currentData().toInt();
+    restartVideo();
+}
+
+void MainWindow::onSizeChanged(int index)
+{
+    if (index < 0)
+        return;
+    m_prefSize = m_sizeCombo->currentData().toSize();
+    populateRates(); // keeps the rate if the new size offers it
+    m_prefFps = m_rateCombo->currentData().toInt();
+    restartVideo();
+}
+
+void MainWindow::onRateChanged(int index)
+{
+    if (index < 0)
+        return;
+    m_prefFps = m_rateCombo->currentData().toInt();
+    // The size list shows the rate each size will run at.
+    m_prefSize = m_sizeCombo->currentData().toSize();
+    populateSizes();
+    restartVideo();
+}
+
+void MainWindow::restartVideo()
+{
     // Only the video needs to restart; the audio keeps playing.
     stopVideo();
     startVideo();

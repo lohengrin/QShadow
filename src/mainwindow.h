@@ -41,7 +41,9 @@ private slots:
     void checkDevice();
     void onDeviceChanged(int index);
     void onAudioChanged(int index);
-    void onModeChanged(int index);
+    void onFormatChanged(int index);
+    void onSizeChanged(int index);
+    void onRateChanged(int index);
     void updateStatus();
     void toggleFullscreen();
     void fitToPipeline();
@@ -56,9 +58,13 @@ private:
     // Refills the audio source list (paired / none / every input) and resolves
     // m_audioId from the user's choice.
     void updateAudioSources();
-    // Refills the Mode list (every format x size x rate the device offers) and
-    // selects the entry closest to the user's preferred format, size and rate.
+    // Refills the Format, Resolution and Frame rate lists from what the device
+    // offers, selecting the entries closest to the user's preferred format, size
+    // and rate. Format and Resolution are on the toolbar (Format only when the
+    // device offers several); Frame rate is in the Options menu.
     void populateModes();
+    void populateSizes();
+    void populateRates();
     struct CurrentMode {
         device::PixelFormat format = device::PixelFormat::Mjpg;
         QSize size;
@@ -75,6 +81,7 @@ private:
     void stopPipeline();
     bool startVideo();
     void stopVideo();
+    void restartVideo();
     void startAudio();
     void stopAudio();
 
@@ -103,7 +110,10 @@ private:
     QLabel *m_statsLabel = nullptr;
     QComboBox *m_deviceCombo = nullptr;
     QComboBox *m_audioCombo = nullptr; // model of the Audio source menu (never shown)
-    QComboBox *m_modeCombo = nullptr;
+    QComboBox *m_sizeCombo = nullptr;
+    QComboBox *m_formatCombo = nullptr;
+    QAction *m_formatAction = nullptr; // the toolbar entry of m_formatCombo (hidden if one format)
+    QComboBox *m_rateCombo = nullptr;   // model of the Frame rate menu (never shown)
     QComboBox *m_shaderCombo = nullptr;
     // Downscale and Audio source live in the Options menu: these combos only hold
     // the choices and the current one (never shown).
