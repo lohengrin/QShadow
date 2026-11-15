@@ -18,8 +18,8 @@ as possible.
 - **Adapts to the input** — you pick the video mode that matches the source
   (e.g. 720p source → 1280×720), and the frame keeps its aspect ratio
   (letterboxed if the window doesn't match).
-- **Formats and frame rates** — pick the *Format*, *Resolution* and *Rate* in
-  the toolbar; each lists what the device offers. MJPG is compressed (high
+- **Formats and frame rates** — pick the *Mode* in the toolbar (resolution,
+  frame rate and pixel format in one list of what the device offers). MJPG is compressed (high
   resolutions and rates, with JPEG artifacts); the uncompressed formats
   (YUYV, UYVY, NV12, RGB24/BGR24/BGRX) are artifact-free but limited by USB
   bandwidth. On the ShadowCast, YUYV is limited by USB 2.0 to low resolutions
@@ -34,14 +34,19 @@ as possible.
   busy, and the audio buffer is kept short.
 - **Audio** captured from the device at its native rate (96 kHz on the
   ShadowCast; 44.1, 48 and other rates work) and resampled to the host output.
-  The *Audio* selector picks the device's own audio, none, or any other input.
+  The *Audio source* option (Options menu) picks the device's own audio, none, or any other input.
   The resampling ratio is nudged by at most ±0.5% to absorb clock drift
   between the device and the sound card, so the buffer stays short without
   clicks or dropouts. A device without audio runs video only.
 - **Hotplug** — start QShadow before plugging in the device, or unplug and
   replug it while running; the capture reconnects automatically.
-- **Live stats** — the status bar shows capture/decode rates, decode time,
-  capture-to-render latency, audio buffer fill and drift correction.
+- **Compact toolbar and live stats** — the toolbar only holds Device, Mode,
+  Shader, volume, Fit and Fullscreen, plus an *Options* menu (the same entries
+  as the right-click menu) for aspect ratio, audio source and downscale. The
+  status bar shows the device, mode and audio state on the left and capture
+  rate, decode time, latency and audio buffer on the right; hover for the
+  full numbers. Problems (no frames, dropped frames, audio underruns) show up
+  as a red warning only while they happen.
 - **Remembers your settings** — window size, aspect-ratio toggle,
   device, pixel format, resolution, frame rate, audio source, volume, shader
   and downscale are restored on the next launch.
@@ -181,15 +186,18 @@ Plug in the capture device before you start it, or any time while it runs.
 
 ## Using QShadow
 
-- **Device** — choose which capture device to show. The *Audio* selector
-  defaults to that device's own audio interface; pick *None* or another input
-  to change it.
-- **Resolution** — use the dropdown in the toolbar to select the video mode
+- **Device** — choose which capture device to show. *Audio source* (in the
+  Options menu, or by right-clicking the video) defaults to that device's own
+  audio interface; pick *None* or another input to change it.
+- **Mode** — use the dropdown in the toolbar to select the video mode
   matching your input signal. 1080p sources: `1920×1080`; 720p sources:
   `1280×720`; retro/4:3 sources: `1024×768`, `800×600`, `640×480`, etc. The
   status bar reports what the device actually negotiated and what each frame
   measures.
-- **Aspect ratio** — toggle *Preserve aspect*. When on, the picture is fitted
+- **Options menu** — the button at the right end of the toolbar (also the
+  right-click menu on the video) holds *Preserve aspect*, *Audio source*,
+  *Downscale* and the other settings.
+- **Aspect ratio** — toggle *Preserve aspect* in the Options menu. When on, the picture is fitted
   inside the window with black bars so it never gets stretched. When off, it
   fills the whole window.
 - **Shader** — pick a rendering style from the toolbar. *None* shows pixels
@@ -209,9 +217,12 @@ Plug in the capture device before you start it, or any time while it runs.
   original pixel grid with nearest-neighbour before the shader runs, so HQ4X
   and xBRZ reconstruct real edges instead of smearing an already-soft image
   (and their GPU cost drops accordingly).
-- **Status bar** — shows the device, negotiated resolution, per-frame
-  resolution, audio state, capture/decode frame rates, dropped frames, and
-  average decode time.
+- **Status bar** — left: device, frame size, pixel format and audio state;
+  right: capture rate, decode time, latency and audio buffer. Hover over either
+  side for the negotiated size, decode rate, drop and underrun counters and the
+  drift correction. A red warning appears while frames are missing or dropped
+  or the audio under/overruns. `QSHADOW_STATS=1` prints the complete numbers
+  to stderr.
 
 ## Troubleshooting
 

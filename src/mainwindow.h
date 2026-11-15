@@ -18,9 +18,9 @@
 
 #include <memory>
 
-class QCheckBox;
 class QCloseEvent;
 class QEvent;
+class QMenu;
 class QToolBar;
 class QLabel;
 class QSlider;
@@ -41,9 +41,7 @@ private slots:
     void checkDevice();
     void onDeviceChanged(int index);
     void onAudioChanged(int index);
-    void onFormatChanged(int index);
-    void onResolutionChanged(int index);
-    void onRateChanged(int index);
+    void onModeChanged(int index);
     void updateStatus();
     void toggleFullscreen();
     void fitToPipeline();
@@ -58,10 +56,17 @@ private:
     // Refills the audio source list (paired / none / every input) and resolves
     // m_audioId from the user's choice.
     void updateAudioSources();
-    void populateResolutions(const QSize &preferred);
-    // Frame rates of the selected format and resolution; prefers `preferred`
-    // (0 = the highest).
-    void populateRates(int preferred);
+    // Refills the Mode list (every format x size x rate the device offers) and
+    // selects the entry closest to the user's preferred format, size and rate.
+    void populateModes();
+    struct CurrentMode {
+        device::PixelFormat format = device::PixelFormat::Mjpg;
+        QSize size;
+        int fps = 0; // 0: the device's default / highest
+    };
+    CurrentMode currentMode() const;
+    // The options shared by the toolbar's Options button and the right-click menu.
+    void populateMenu(QMenu *menu);
     void loadSettings();
     void saveSettings();
     // Whole pipeline (video + audio) vs video only: a format/resolution change
@@ -97,13 +102,14 @@ private:
     QLabel *m_status = nullptr;
     QLabel *m_statsLabel = nullptr;
     QComboBox *m_deviceCombo = nullptr;
-    QComboBox *m_audioCombo = nullptr;
-    QComboBox *m_formatCombo = nullptr;
-    QComboBox *m_resCombo = nullptr;
-    QComboBox *m_rateCombo = nullptr;
+    QComboBox *m_audioCombo = nullptr; // model of the Audio source menu (never shown)
+    QComboBox *m_modeCombo = nullptr;
     QComboBox *m_shaderCombo = nullptr;
+    // Downscale and Audio source live in the Options menu: these combos only hold
+    // the choices and the current one (never shown).
     QComboBox *m_downscaleCombo = nullptr;
-    QCheckBox *m_aspectCheck = nullptr;
+    QAction *m_aspectAction = nullptr;
+    QLabel *m_warnLabel = nullptr;
     QSlider *m_volumeSlider = nullptr;
     QAction *m_fullscreenAction = nullptr;
     QAction *m_fitAction = nullptr;
@@ -123,4 +129,7 @@ private:
     uint64_t m_lastCaptured = 0;
     uint64_t m_lastDecoded = 0;
     uint64_t m_lastDecodeNs = 0;
+    uint64_t m_lastDrops = 0;
+    uint64_t m_lastUnderruns = 0;
+    uint64_t m_lastXruns = 0;
 };

@@ -10,6 +10,7 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QLabel>
 #include <QLayout>
 #include <QMenu>
 #include <QSettings>
@@ -18,6 +19,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QtTest>
 
 #include <functional>
@@ -182,7 +184,7 @@ private slots:
         });
         QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
 
-        for (const char *expected : {"Preserve aspect", "Format", "Resolution", "Rate",
+        for (const char *expected : {"Preserve aspect", "Device", "Mode",
                                      "Audio source", "Shader",
                                      "Downscale", "Volume", "Fit window to video"})
             QVERIFY2(top.contains(QLatin1String(expected)), expected);
@@ -197,6 +199,45 @@ private slots:
         QVERIFY(shader);
         QCOMPARE(shaders.size(), shader->count());
         QCOMPARE(shaders.value(0), shader->itemText(0));
+    }
+
+    // The toolbar only keeps what is changed while watching; the rest is in the
+    // Options menu, which offers the same entries as the right-click menu.
+    void toolbarIsCompactAndOptionsMirrorTheContextMenu()
+    {
+        MainWindow w(nullptr);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *toolbar = w.findChild<QToolBar *>();
+        QVERIFY(toolbar);
+
+        // Three combo boxes (device, mode, shader) and no text labels.
+        QCOMPARE(toolbar->findChildren<QComboBox *>().size(), 3);
+        QVERIFY(toolbar->findChildren<QLabel *>().size() <= 1); // the volume icon
+
+        QToolButton *options = nullptr;
+        for (QToolButton *b : toolbar->findChildren<QToolButton *>()) {
+            if (b->menu())
+                options = b;
+        }
+        QVERIFY(options);
+
+        const auto titles = [](QMenu *menu) {
+            QStringList out;
+            for (QAction *a : menu->actions())
+                out << a->text();
+            return out;
+        };
+        QStringList fromButton;
+        QMenu *menu = options->menu();
+        QMetaObject::invokeMethod(menu, "aboutToShow");
+        fromButton = titles(menu);
+
+        QStringList fromContext;
+        withPopupMenu(this, [&](QMenu *m) { fromContext = titles(m); });
+        QMetaObject::invokeMethod(&w, "showContextMenu", Q_ARG(QPoint, QPoint(50, 50)));
+        QVERIFY(!fromButton.isEmpty());
+        QCOMPARE(fromButton, fromContext);
     }
 
     void choosingAMenuEntryActsLikeThePickingItInTheToolbar()
