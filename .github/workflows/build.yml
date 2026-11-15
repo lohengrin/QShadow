@@ -146,9 +146,17 @@ jobs:
           & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
           New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
 
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      # Import the MSVC x64 environment (vcvars64) into the following steps.
+      - name: MSVC environment
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+                  -latest -products * -property installationPath `
+                  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+          if (-not $vs) { Write-Error "no Visual Studio with the MSVC x64 tools found"; exit 1 }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV }
+          }
 
       - name: Configure
         run: cmake --preset windows-ci
