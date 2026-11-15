@@ -39,7 +39,7 @@ inline bool isPlausibleJpeg(const char *data, size_t size)
            && static_cast<unsigned char>(data[1]) == 0xd8;
 }
 
-// One captured frame: a JPEG for MJPG, or raw packed pixels for YUYV
+// One captured frame: a JPEG for MJPG, or raw pixels for the other formats
 // (width/height/stride describe the raw layout; unused for MJPG).
 struct Frame {
     QByteArray data;
@@ -47,6 +47,9 @@ struct Frame {
     int width = 0;
     int height = 0;
     int stride = 0;
+    // How YCbCr formats map to RGB, as reported by the driver (ignored for MJPG
+    // and RGB formats). The device's quirk, if any, is applied by the decoder.
+    device::ColorInfo color;
     // When the frame reached the host (the driver's capture timestamp when it
     // provides one, else the dequeue time); origin of the latency readout.
     std::chrono::steady_clock::time_point stamp;

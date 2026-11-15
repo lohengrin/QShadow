@@ -19,46 +19,45 @@ QString readSysfs(const QString &path)
     return QString::fromLatin1(f.readAll().trimmed());
 }
 
-// Walk up from the video4linux dir towards the root looking for a sysfs USB
-// device node with the given vendor/product IDs.
-bool usbVidPidOnPathImpl(QString dir, int vid, int pid)
+} // namespace
+
+QString usbDeviceDir(const QString &sysfsPath)
 {
+    QString dir = sysfsPath;
     while (true) {
         while (dir.endsWith('/'))
             dir.chop(1);
-        if (dir.isEmpty() || dir == "/" || dir.startsWith("/sys/class"))
-            break;
-
-        const QString vidPath = dir + "/idVendor";
-        const QString pidPath = dir + "/idProduct";
-        if (QFile::exists(vidPath) && QFile::exists(pidPath)) {
-            bool okV = false;
-            bool okP = false;
-            const int v = readSysfs(vidPath).toInt(&okV, 16);
-            const int p = readSysfs(pidPath).toInt(&okP, 16);
-            if (okV && okP && v == vid && p == pid)
-                return true;
-        }
+        if (dir.isEmpty())
+            return {};
+        if (QFile::exists(dir + "/idVendor") && QFile::exists(dir + "/idProduct"))
+            return dir;
         const int slash = dir.lastIndexOf('/');
         if (slash <= 0)
-            break;
+            return {};
         dir = dir.left(slash);
     }
-    return false;
 }
 
-} // namespace
-
-bool vidPidOnPath(QString sysfsPath, int vid, int pid)
+bool readUsbIds(const QString &usbDir, int *vid, int *pid)
 {
-    return usbVidPidOnPathImpl(std::move(sysfsPath), vid, pid);
+    bool okV = false;
+    bool okP = false;
+    const int v = readSysfs(usbDir + "/idVendor").toInt(&okV, 16);
+    const int p = readSysfs(usbDir + "/idProduct").toInt(&okP, 16);
+    if (!okV || !okP)
+        return false;
+    *vid = v;
+    *pid = p;
+    return true;
 }
 
-int findSoundCard(int vid, int pid)
+int findSoundCardOnUsbDevice(const QString &usbDir, const QString &sysRoot)
 {
-    // /sys/class/sound/cardN -> .../usbX/.../sound/cardN ; walk up to the USB
-    // device node carrying the vendor/product IDs.
-    QDir root(QStringLiteral("/sys/class/sound"));
+    if (usbDir.isEmpty())
+        return -1;
+    // /sys/class/sound/cardN -> .../usbX/.../sound/cardN ; the card belongs to the
+    // USB device when walking up from it reaches the same device directory.
+    QDir root(sysRoot + QStringLiteral("/class/sound"));
     const QStringList entries = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &entry : entries) {
         if (!entry.startsWith(QLatin1String("card")))
@@ -68,8 +67,8 @@ int findSoundCard(int vid, int pid)
         if (!ok)
             continue; // not a bare cardN node
         const QString resolved = QFileInfo(root.filePath(entry)).symLinkTarget();
-        if (resolved.startsWith(QStringLiteral("/sys/devices"))
-            && usbVidPidOnPathImpl(resolved, vid, pid))
+        if (resolved.startsWith(sysRoot + QStringLiteral("/devices"))
+            && usbDeviceDir(resolved) == usbDir)
             return index;
     }
     return -1;

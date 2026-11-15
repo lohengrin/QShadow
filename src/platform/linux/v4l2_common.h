@@ -14,7 +14,16 @@
 // V4L2 fourcc for a PixelFormat.
 inline uint32_t toFourcc(device::PixelFormat format)
 {
-    return format == device::PixelFormat::Yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+    switch (format) {
+    case device::PixelFormat::Yuyv: return V4L2_PIX_FMT_YUYV;
+    case device::PixelFormat::Nv12: return V4L2_PIX_FMT_NV12;
+    case device::PixelFormat::Uyvy: return V4L2_PIX_FMT_UYVY;
+    case device::PixelFormat::Rgb24: return V4L2_PIX_FMT_RGB24;
+    case device::PixelFormat::Bgr24: return V4L2_PIX_FMT_BGR24;
+    case device::PixelFormat::Bgrx: return V4L2_PIX_FMT_BGR32;
+    case device::PixelFormat::Mjpg: break;
+    }
+    return V4L2_PIX_FMT_MJPEG;
 }
 
 // ioctl() restarted on EINTR.

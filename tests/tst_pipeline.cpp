@@ -3,6 +3,7 @@
 
 #include "capture.h"
 #include "decoder.h"
+#include "devicequirks.h"
 
 #include <QImage>
 #include <QPainter>
@@ -391,6 +392,119 @@ private slots:
         // Stride not a multiple of 4 bytes.
         QVERIFY(h.feed(yuyvFrame(6, 2, 14, QByteArray(28, 'x'))));
         QCOMPARE(h.last()->kind, VideoFrame::Kind::Rgba);
+    }
+
+    // ---- other raw formats and colour interpretation ----
+    void limitedRangeYuyvIsExpandedOnTheCpu()
+    {
+        Harness h(true); // the GPU path only knows full-range BT.601
+        const uint8_t px[] = {16, 128, 16, 128, 235, 128, 235, 128};
+        Frame f = yuyvFrame(4, 1, 8, QByteArray(reinterpret_cast<const char *>(px), 8));
+        f.color = device::ColorInfo{device::ColorMatrix::Bt601, false};
+        QVERIFY(h.feed(f));
+        QCOMPARE(h.last()->kind, VideoFrame::Kind::Rgba);
+        QVERIFY(qRed(h.last()->rgba.pixel(0, 0)) <= 1);
+        QVERIFY(qRed(h.last()->rgba.pixel(2, 0)) >= 254);
+        QVERIFY(qGreen(h.last()->rgba.pixel(3, 0)) >= 254);
+    }
+
+    void bt709DiffersFromBt601ForSaturatedChroma()
+    {
+        Harness h(false);
+        const uint8_t px[] = {128, 128, 128, 255}; // Y=128, Cb=128, Cr=255
+        Frame f = yuyvFrame(2, 1, 4, QByteArray(reinterpret_cast<const char *>(px), 4));
+        QVERIFY(h.feed(f));
+        const int g601 = qGreen(h.last()->rgba.pixel(0, 0));
+        f.color = device::ColorInfo{device::ColorMatrix::Bt709, true};
+        QVERIFY(h.feed(f));
+        const int g709 = qGreen(h.last()->rgba.pixel(0, 0));
+        QVERIFY2(std::abs(g601 - 37) <= 2, qPrintable(QString::number(g601)));
+        QVERIFY2(std::abs(g709 - 69) <= 2, qPrintable(QString::number(g709)));
+    }
+
+    void uyvyIsYuyvWithSwappedBytes()
+    {
+        Harness h(false);
+        const uint8_t yuyv[] = {76, 85, 76, 255, 200, 90, 40, 160};
+        const uint8_t uyvy[] = {85, 76, 255, 76, 90, 200, 160, 40};
+        Frame a = yuyvFrame(4, 1, 8, QByteArray(reinterpret_cast<const char *>(yuyv), 8));
+        Frame b = a;
+        b.format = device::PixelFormat::Uyvy;
+        b.data = QByteArray(reinterpret_cast<const char *>(uyvy), 8);
+        QVERIFY(h.feed(a));
+        const QImage ia = h.last()->rgba.copy();
+        QVERIFY(h.feed(b));
+        QCOMPARE(h.last()->kind, VideoFrame::Kind::Rgba);
+        QCOMPARE(h.last()->rgba, ia);
+    }
+
+    void nv12SharesChromaOver2x2Blocks()
+    {
+        Harness h(true);
+        // 4x2: luma row stride 4; one chroma row of two (Cb,Cr) pairs.
+        const uint8_t raw[] = {76, 76, 128, 128,   76, 76, 128, 128,   // Y
+                               85, 255, 128, 128};                      // CbCr, CbCr
+        Frame f;
+        f.format = device::PixelFormat::Nv12;
+        f.width = 4;
+        f.height = 2;
+        f.stride = 4;
+        f.data = QByteArray(reinterpret_cast<const char *>(raw), sizeof(raw));
+        QVERIFY(h.feed(f));
+        const QImage &img = h.last()->rgba;
+        QCOMPARE(h.last()->kind, VideoFrame::Kind::Rgba);
+        for (int y = 0; y < 2; ++y) {
+            QVERIFY(qRed(img.pixel(1, y)) > 250 && qGreen(img.pixel(1, y)) < 8);
+            const int grey = qRed(img.pixel(3, y));
+            QVERIFY(grey >= 127 && grey <= 129);
+        }
+    }
+
+    void rgbFormatsAreSwizzledToRgba()
+    {
+        Harness h(false);
+        const uint8_t rgb[] = {10, 20, 30};
+        Frame f;
+        f.width = 1;
+        f.height = 1;
+        f.format = device::PixelFormat::Rgb24;
+        f.stride = 3;
+        f.data = QByteArray(reinterpret_cast<const char *>(rgb), 3);
+        QVERIFY(h.feed(f));
+        QCOMPARE(h.last()->rgba.pixel(0, 0), qRgba(10, 20, 30, 255));
+
+        f.format = device::PixelFormat::Bgr24;
+        QVERIFY(h.feed(f));
+        QCOMPARE(h.last()->rgba.pixel(0, 0), qRgba(30, 20, 10, 255));
+
+        const uint8_t bgrx[] = {10, 20, 30, 0};
+        f.format = device::PixelFormat::Bgrx;
+        f.stride = 4;
+        f.data = QByteArray(reinterpret_cast<const char *>(bgrx), 4);
+        QVERIFY(h.feed(f));
+        QCOMPARE(h.last()->rgba.pixel(0, 0), qRgba(30, 20, 10, 255));
+    }
+
+    void truncatedRawFramesAreDropped()
+    {
+        Harness h(false);
+        Frame f;
+        f.format = device::PixelFormat::Nv12; // needs stride*h*3/2 = 24 bytes
+        f.width = 4;
+        f.height = 4;
+        f.stride = 4;
+        f.data = QByteArray(16, 'x');
+        QVERIFY(h.feed(f));
+        QVERIFY(!h.last());
+        QCOMPARE(h.stats().droppedDecode.load(), uint64_t(1));
+    }
+
+    void shadowCastQuirkForcesFullRangeYuyvOnly()
+    {
+        using namespace device;
+        QVERIFY(quirks::colorOverride(kUsbVendorId, kUsbProductId, PixelFormat::Yuyv));
+        QVERIFY(!quirks::colorOverride(kUsbVendorId, kUsbProductId, PixelFormat::Nv12));
+        QVERIFY(!quirks::colorOverride(0x046d, 0x0825, PixelFormat::Yuyv));
     }
 
     // ---- BufferPool (capture buffer recycling) ----

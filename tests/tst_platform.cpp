@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Guillaume Millet
 
-// Smoke test of the platform backend against the real ShadowCast. Skipped when
-// the dongle is not connected, so it is safe to run anywhere.
+// Smoke test of the platform backend against the first real capture device.
+// Skipped when none is connected, so it is safe to run anywhere.
 
 #include "platform/platform.h"
 
@@ -17,14 +17,28 @@ class TstPlatform : public QObject {
 private slots:
     void initTestCase()
     {
-        m_ids = platform::findDevice();
-        if (m_ids.video.isEmpty())
-            QSKIP("ShadowCast not connected");
+        const auto devices = platform::listDevices();
+        if (devices.isEmpty())
+            QSKIP("no video capture device connected");
+        for (const auto &d : devices) {
+            QVERIFY(!d.videoId.isEmpty());
+            QVERIFY(!d.name.isEmpty());
+        }
+        // Prefer a device whose MJPG modes the tests below can use.
+        m_dev = devices.first();
+        for (const auto &d : devices) {
+            if (!platform::enumerateModes(d.videoId, device::PixelFormat::Mjpg).isEmpty()) {
+                m_dev = d;
+                break;
+            }
+        }
+        if (platform::enumerateModes(m_dev.videoId, device::PixelFormat::Mjpg).isEmpty())
+            QSKIP("no connected device offers MJPG");
     }
 
     void modesAreLargestFirst()
     {
-        const auto mjpg = platform::enumerateModes(m_ids.video, device::PixelFormat::Mjpg);
+        const auto mjpg = platform::enumerateModes(m_dev.videoId, device::PixelFormat::Mjpg);
         QVERIFY(!mjpg.isEmpty());
         for (qsizetype i = 1; i < mjpg.size(); ++i) {
             const QSize a = mjpg[i - 1].size, b = mjpg[i].size;
@@ -33,19 +47,19 @@ private slots:
         for (const auto &mode : mjpg)
             QVERIFY(mode.fps > 0);
         // YUYV may or may not be offered; if it is, it must be well-formed too.
-        for (const auto &mode : platform::enumerateModes(m_ids.video, device::PixelFormat::Yuyv))
+        for (const auto &mode : platform::enumerateModes(m_dev.videoId, device::PixelFormat::Yuyv))
             QVERIFY(mode.size.isValid());
     }
 
     void captureDeliversFramesAndRestarts()
     {
-        const auto modes = platform::enumerateModes(m_ids.video, device::PixelFormat::Mjpg);
+        const auto modes = platform::enumerateModes(m_dev.videoId, device::PixelFormat::Mjpg);
         QVERIFY(!modes.isEmpty());
         for (int round = 0; round < 3; ++round) {
             Stats stats;
             FrameQueue queue(2);
-            auto capture = platform::createCapture(m_ids.video, modes.last().size,
-                                                   device::PixelFormat::Mjpg, &stats);
+            auto capture = platform::createCapture(m_dev.videoId, modes.last().size,
+                                                   device::PixelFormat::Mjpg, 0, &stats);
             QVERIFY(capture->start(&queue));
             QVERIFY(capture->isRunning());
             QCOMPARE(capture->negotiatedSize(), modes.last().size);
@@ -65,12 +79,12 @@ private slots:
 
     void destroyingAStartedCaptureIsSafe()
     {
-        const auto modes = platform::enumerateModes(m_ids.video, device::PixelFormat::Mjpg);
+        const auto modes = platform::enumerateModes(m_dev.videoId, device::PixelFormat::Mjpg);
         Stats stats;
         FrameQueue queue(2);
         {
-            auto capture = platform::createCapture(m_ids.video, modes.last().size,
-                                                   device::PixelFormat::Mjpg, &stats);
+            auto capture = platform::createCapture(m_dev.videoId, modes.last().size,
+                                                   device::PixelFormat::Mjpg, 0, &stats);
             QVERIFY(capture->start(&queue));
         } // destructor stops and joins while samples may be in flight
         QVERIFY(true);
@@ -78,12 +92,12 @@ private slots:
 
     void audioStartsAndStops()
     {
-        if (m_ids.audio.isEmpty())
-            QSKIP("ShadowCast audio interface not found");
+        if (m_dev.audioId.isEmpty())
+            QSKIP("no audio interface paired with the device");
         for (int round = 0; round < 3; ++round) {
             Stats stats;
             AudioRing ring;
-            auto audio = platform::createAudioInput(m_ids.audio, &ring, &stats);
+            auto audio = platform::createAudioInput(m_dev.audioId, &ring, &stats);
             QVERIFY2(audio->start(), qPrintable(audio->errorMessage()));
             QTRY_VERIFY_WITH_TIMEOUT(ring.depthBytes() > 0, 3000);
             audio->stop();
@@ -92,7 +106,7 @@ private slots:
     }
 
 private:
-    platform::DeviceIds m_ids;
+    platform::DeviceInfo m_dev;
 };
 
 QTEST_GUILESS_MAIN(TstPlatform)

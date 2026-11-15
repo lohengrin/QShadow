@@ -9,13 +9,24 @@
 #include "mf_device.h"
 #include "wasapi_audio.h"
 
-platform::DeviceIds platform::findDevice()
+QList<platform::DeviceInfo> platform::listDevices()
 {
-    DeviceIds ids;
-    ids.video = mfdev::findVideo();
-    if (!ids.video.isEmpty())
-        ids.audio = wasapi::findCaptureEndpoint();
-    return ids;
+    QList<DeviceInfo> devices;
+    for (const mfdev::Video &video : mfdev::listVideo()) {
+        DeviceInfo info;
+        info.name = video.name;
+        info.videoId = video.link;
+        wincom::parseVidPid(video.link, &info.vid, &info.pid);
+        if (info.vid != 0)
+            info.audioId = wasapi::findCaptureEndpoint(info.vid, info.pid);
+        devices.append(info);
+    }
+    return devices;
+}
+
+QList<platform::AudioInputInfo> platform::listAudioInputs()
+{
+    return wasapi::listCaptureEndpoints();
 }
 
 QList<device::Mode> platform::enumerateModes(const QString &videoId, device::PixelFormat format)
@@ -24,9 +35,10 @@ QList<device::Mode> platform::enumerateModes(const QString &videoId, device::Pix
 }
 
 std::unique_ptr<CaptureSource> platform::createCapture(const QString &videoId, const QSize &target,
-                                                       device::PixelFormat format, Stats *stats)
+                                                       device::PixelFormat format, int fps,
+                                                       Stats *stats)
 {
-    return std::make_unique<MfCapture>(videoId, target, format, stats);
+    return std::make_unique<MfCapture>(videoId, target, format, fps, stats);
 }
 
 std::unique_ptr<AudioInput> platform::createAudioInput(const QString &audioId, AudioRing *ring,

@@ -21,6 +21,7 @@ constexpr double kTargetRingFrames = 8.0 * 48.0; // 8 ms
 AudioPipeline::AudioPipeline(AudioRing *ring, int inputRate, int channels)
     : m_ring(ring)
     , m_decimation(size_t(std::max(1, inputRate / 48000)))
+    , m_nominalStep(double(std::max(1, inputRate)) / double(m_decimation) / 48000.0)
     , m_channels(size_t(std::max(1, channels)))
     , m_controller(kTargetRingFrames)
 {
@@ -37,8 +38,9 @@ void AudioPipeline::process(const int16_t *interleaved, size_t frames)
         m_pending.push_back(sum * invChannels);
     }
 
-    // Decimate to 48 kHz by averaging groups of samples, carrying the remainder
-    // across calls.
+    // Decimate by the whole number of 48 kHz in the input rate by averaging
+    // groups of samples, carrying the remainder across calls. What is left of
+    // the rate (none for 96000, 44100/48000 for 44100) the resampler handles.
     const size_t groups = m_pending.size() / m_decimation;
     if (groups == 0)
         return;
@@ -58,7 +60,7 @@ void AudioPipeline::process(const int16_t *interleaved, size_t frames)
         double(m_ring->depthBytes()) / double(AudioRing::kBytesPerMs) * 48.0);
     m_driftPpm.store(int(m_controller.adjust() * 1e6), std::memory_order_relaxed);
     m_resampled.clear();
-    m_resampler.process(m_mono.data(), m_mono.size(), step, &m_resampled);
+    m_resampler.process(m_mono.data(), m_mono.size(), m_nominalStep * step, &m_resampled);
     if (m_resampled.empty())
         return;
 

@@ -5,14 +5,19 @@
 
 #include <QString>
 
-// sysfs helpers for locating the ShadowCast's interfaces by USB vendor/product ID.
+// sysfs helpers to relate a capture device's interfaces (video node, sound card)
+// through the USB device they share.
 namespace sysfs_usb {
 
-// True if walking up from `sysfsPath` reaches a USB device node whose idVendor
-// and idProduct match.
-bool vidPidOnPath(QString sysfsPath, int vid, int pid);
+// The sysfs directory of the USB device (the ancestor carrying idVendor/idProduct)
+// that a sysfs path belongs to, or an empty string for a non-USB device.
+QString usbDeviceDir(const QString &sysfsPath);
 
-// ALSA card index of the sound card belonging to that USB device (-1 if none).
-int findSoundCard(int vid, int pid);
+// Reads the vendor/product IDs of a USB device directory returned by usbDeviceDir.
+bool readUsbIds(const QString &usbDir, int *vid, int *pid);
+
+// Index of the ALSA card that lives on the given USB device directory, or -1.
+// `sysRoot` is where sysfs is mounted (a fixture directory in tests).
+int findSoundCardOnUsbDevice(const QString &usbDir, const QString &sysRoot = QStringLiteral("/sys"));
 
 } // namespace sysfs_usb

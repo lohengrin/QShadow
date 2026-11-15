@@ -3,6 +3,8 @@
 
 #include "com_common.h"
 
+#include <QRegularExpression>
+
 #include "device.h"
 
 #include <mfapi.h>
@@ -37,12 +39,16 @@ QString hresultText(HRESULT hr)
     return QStringLiteral("0x%1").arg(quint32(hr), 8, 16, QLatin1Char('0'));
 }
 
-bool isShadowCastPath(const QString &id)
+bool parseVidPid(const QString &id, int *vid, int *pid)
 {
-    const QString needle = QStringLiteral("vid_%1&pid_%2")
-                               .arg(device::kUsbVendorId, 4, 16, QLatin1Char('0'))
-                               .arg(device::kUsbProductId, 4, 16, QLatin1Char('0'));
-    return id.contains(needle, Qt::CaseInsensitive);
+    static const QRegularExpression re(QStringLiteral("vid_([0-9a-f]{4})&pid_([0-9a-f]{4})"),
+                                       QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = re.match(id);
+    if (!m.hasMatch())
+        return false;
+    *vid = m.captured(1).toInt(nullptr, 16);
+    *pid = m.captured(2).toInt(nullptr, 16);
+    return true;
 }
 
 } // namespace wincom

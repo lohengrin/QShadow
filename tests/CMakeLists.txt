@@ -38,4 +38,5 @@ endif()
 # The ALSA capture loop's recovery logic (Linux backend; uses a fake PCM, no ALSA).
 if(UNIX AND NOT APPLE)
   qshadow_add_test(tst_alsa_loop)
+  qshadow_add_test(tst_sysfs)
 endif()

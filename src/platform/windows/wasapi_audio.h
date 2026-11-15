@@ -15,14 +15,16 @@
 
 namespace wasapi {
 
-// Endpoint ID of the ShadowCast's capture endpoint: the USB IDs behind the
-// endpoint's topology connector, falling back to the endpoint name. Empty if
-// absent.
-QString findCaptureEndpoint();
+// Endpoint ID of the capture endpoint on the USB device with these IDs (read
+// from the endpoint's topology connector). Empty if there is none.
+QString findCaptureEndpoint(int vid, int pid);
+
+// Every active capture endpoint: friendly name and endpoint id.
+QList<platform::AudioInputInfo> listCaptureEndpoints();
 
 } // namespace wasapi
 
-// WASAPI shared-mode, event-driven capture from the ShadowCast endpoint on its
+// WASAPI shared-mode, event-driven capture from the device's endpoint on its
 // own thread, at the smallest engine period the driver allows (IAudioClient3).
 // Samples go through an AudioPipeline (48 kHz stereo, drift-compensated) into
 // the AudioRing.

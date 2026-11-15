@@ -225,33 +225,117 @@ void Decoder::join()
         m_thread.join();
 }
 
-// YUYV (4:2:2) -> RGBA8888. The ShadowCast's YUYV is FULL range BT.601 (the same
-// values as its JPEGs' YCbCr, Y spanning 0..255), although the driver reports it
-// as limited range: measured against the MJPG stream of the same scene, the
-// limited-range assumption made the picture visibly darker. Integer
-// fixed-point (8 fractional bits); chroma is shared by pixel pairs.
-void Decoder::convertYuyv(const Frame &frame, QImage &dst)
+namespace {
+
+// Fixed-point (12 fractional bits) YCbCr -> RGB for a matrix and range.
+struct YuvCoeffs {
+    int yScale; // luma gain (1.0, or 255/219 for limited range)
+    int yOff;   // luma black level (0 or 16)
+    int rv, gu, gv, bu;
+};
+
+YuvCoeffs coeffsFor(const device::ColorInfo &c)
+{
+    constexpr double kOne = 4096.0;
+    const double chroma = c.fullRange ? 1.0 : 255.0 / 224.0;
+    const bool bt709 = c.matrix == device::ColorMatrix::Bt709;
+    const double rv = bt709 ? 1.5748 : 1.402;
+    const double gu = bt709 ? -0.187324 : -0.344136;
+    const double gv = bt709 ? -0.468124 : -0.714136;
+    const double bu = bt709 ? 1.8556 : 1.772;
+    YuvCoeffs k;
+    k.yScale = int((c.fullRange ? 1.0 : 255.0 / 219.0) * kOne + 0.5);
+    k.yOff = c.fullRange ? 0 : 16;
+    k.rv = int(rv * chroma * kOne + (rv < 0 ? -0.5 : 0.5));
+    k.gu = int(gu * chroma * kOne + (gu < 0 ? -0.5 : 0.5));
+    k.gv = int(gv * chroma * kOne + (gv < 0 ? -0.5 : 0.5));
+    k.bu = int(bu * chroma * kOne + (bu < 0 ? -0.5 : 0.5));
+    return k;
+}
+
+inline uint32_t clamp8(int v)
+{
+    return uint32_t(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
+// Memory order R,G,B,A == RGBA8888 on little-endian.
+inline uint32_t pack(const YuvCoeffs &k, int y, int u, int v)
+{
+    const int c = (y - k.yOff) * k.yScale + 2048;
+    return clamp8((c + k.rv * v) >> 12) | (clamp8((c + k.gu * u + k.gv * v) >> 12) << 8)
+           | (clamp8((c + k.bu * u) >> 12) << 16) | 0xff000000u;
+}
+
+} // namespace
+
+// Raw frame -> RGBA8888 on the CPU. Chroma is shared by pixel pairs (4:2:2) or
+// 2x2 blocks (NV12), nearest. The full-range BT.601 case reproduces the
+// ShadowCast's YUYV exactly as the GPU shader does.
+void Decoder::convertRaw(const Frame &frame, const device::ColorInfo &color, QImage &dst)
 {
     const int w = frame.width;
     const int h = frame.height;
-    const auto clamp8 = [](int v) { return uint32_t(v < 0 ? 0 : (v > 255 ? 255 : v)); };
     const auto *base = reinterpret_cast<const unsigned char *>(frame.data.constData());
-    for (int y = 0; y < h; ++y) {
-        const unsigned char *s = base + size_t(y) * size_t(frame.stride);
-        uint32_t *d = reinterpret_cast<uint32_t *>(dst.scanLine(y));
-        for (int x = 0; x < w; x += 2, s += 4) {
-            const int u = s[1] - 128;
-            const int v = s[3] - 128;
-            const int rc = 359 * v + 128;            // 1.402
-            const int gc = -88 * u - 183 * v + 128;  // -0.344136, -0.714136
-            const int bc = 454 * u + 128;            // 1.772
-            for (int k = 0; k < 2 && x + k < w; ++k) { // w may be odd: no pixel past the row
-                const int c = int(s[k * 2]) << 8;
-                // Memory order R,G,B,A == RGBA8888 on little-endian.
-                d[x + k] = clamp8((c + rc) >> 8) | (clamp8((c + gc) >> 8) << 8)
-                           | (clamp8((c + bc) >> 8) << 16) | 0xff000000u;
+    const size_t stride = size_t(frame.stride);
+    const YuvCoeffs k = coeffsFor(color);
+
+    switch (frame.format) {
+    case device::PixelFormat::Yuyv:
+    case device::PixelFormat::Uyvy: {
+        const bool yuyv = frame.format == device::PixelFormat::Yuyv;
+        const int y0 = yuyv ? 0 : 1, u = yuyv ? 1 : 0, y1 = yuyv ? 2 : 3, v = yuyv ? 3 : 2;
+        for (int y = 0; y < h; ++y) {
+            const unsigned char *s = base + size_t(y) * stride;
+            uint32_t *d = reinterpret_cast<uint32_t *>(dst.scanLine(y));
+            for (int x = 0; x < w; x += 2, s += 4) {
+                const int cb = s[u] - 128;
+                const int cr = s[v] - 128;
+                d[x] = pack(k, s[y0], cb, cr);
+                if (x + 1 < w) // w may be odd: no pixel past the row
+                    d[x + 1] = pack(k, s[y1], cb, cr);
             }
         }
+        break;
+    }
+    case device::PixelFormat::Nv12: {
+        const unsigned char *chroma = base + stride * size_t(h);
+        for (int y = 0; y < h; ++y) {
+            const unsigned char *ys = base + size_t(y) * stride;
+            const unsigned char *cs = chroma + size_t(y >> 1) * stride;
+            uint32_t *d = reinterpret_cast<uint32_t *>(dst.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const unsigned char *c = cs + (x & ~1);
+                d[x] = pack(k, ys[x], c[0] - 128, c[1] - 128);
+            }
+        }
+        break;
+    }
+    case device::PixelFormat::Rgb24:
+    case device::PixelFormat::Bgr24: {
+        const bool rgb = frame.format == device::PixelFormat::Rgb24;
+        for (int y = 0; y < h; ++y) {
+            const unsigned char *s = base + size_t(y) * stride;
+            uint32_t *d = reinterpret_cast<uint32_t *>(dst.scanLine(y));
+            for (int x = 0; x < w; ++x, s += 3) {
+                const uint32_t r = rgb ? s[0] : s[2];
+                const uint32_t b = rgb ? s[2] : s[0];
+                d[x] = r | (uint32_t(s[1]) << 8) | (b << 16) | 0xff000000u;
+            }
+        }
+        break;
+    }
+    case device::PixelFormat::Bgrx: {
+        for (int y = 0; y < h; ++y) {
+            const unsigned char *s = base + size_t(y) * stride;
+            uint32_t *d = reinterpret_cast<uint32_t *>(dst.scanLine(y));
+            for (int x = 0; x < w; ++x, s += 4)
+                d[x] = uint32_t(s[2]) | (uint32_t(s[1]) << 8) | (uint32_t(s[0]) << 16)
+                       | 0xff000000u;
+        }
+        break;
+    }
+    case device::PixelFormat::Mjpg:
+        break;
     }
 }
 
@@ -275,23 +359,32 @@ void Decoder::run()
         int w = 0;
         int h = 0;
 
-        if (frame.format == device::PixelFormat::Yuyv) {
+        if (frame.format != device::PixelFormat::Mjpg) {
             w = frame.width;
             h = frame.height;
-            if (m_gpuYuv && m_gpuYuv() && (w % 2) == 0 && (frame.stride % 4) == 0) {
-                // The GPU converts: hand over the capture buffer as it is (a
-                // shared reference, no copy). Texels are 4 bytes = 2 pixels.
+            const device::ColorInfo color = m_colorOverride.value_or(frame.color);
+            const bool sane = w > 0 && h > 0 && frame.stride >= device::minStride(frame.format, w)
+                              && size_t(frame.data.size())
+                                     >= device::rawFrameBytes(frame.format, frame.stride, h);
+            if (!sane) {
+                ok = false;
+            } else if (frame.format == device::PixelFormat::Yuyv && color == device::ColorInfo{}
+                       && m_gpuYuv && m_gpuYuv() && (w % 2) == 0 && (frame.stride % 4) == 0) {
+                // The GPU converts (full-range BT.601): hand over the capture
+                // buffer as it is (a shared reference, no copy). Texels are 4
+                // bytes = 2 pixels.
                 out = std::make_shared<VideoFrame>();
                 out->kind = VideoFrame::Kind::Yuyv;
                 out->planes[0].width = w;
                 out->planes[0].height = h;
                 out->planes[0].stride = frame.stride;
                 out->planes[0].data = frame.data;
+                ok = true;
             } else {
                 out = acquireRgba(w, h);
-                convertYuyv(frame, out->rgba);
+                convertRaw(frame, color, out->rgba);
+                ok = true;
             }
-            ok = true;
         } else if (headerJpeg(cinfo, err, frame)) {
             const bool raw = m_gpuYuv && m_gpuYuv() && isPlanarYuv(cinfo);
             if (startJpeg(cinfo, err, raw)) {
