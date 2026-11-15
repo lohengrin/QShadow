@@ -390,6 +390,7 @@ bool MainWindow::connectDevice()
         m_audioId.clear();
         m_sizes.clear();
         m_idleStatus = why;
+        updateAudioSources(); // the audio list does not depend on a video device
         return false;
     };
     if (m_devices.isEmpty())
