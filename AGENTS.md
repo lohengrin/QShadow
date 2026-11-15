@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI agents and contributors working in this repository.
+Guidance for contributors (human or AI) working in this repository.
 
 ## Project
 
@@ -89,8 +89,7 @@ use system tools:
   `CMakeLists.txt` and `vcpkg.json`), merge, then push tag `vX.Y.Z`. `release.yml`
   fails fast if the tag, `CMakeLists.txt` and `vcpkg.json` disagree; a tag with a
   `-` suffix is published as a prerelease. Assets: Windows ZIP, Linux AppImage,
-  Linux tar.gz, `SHA256SUMS`. The agent sandbox cannot push tags (the proxy
-  returns 403); ask the user to push the tag.
+  Linux tar.gz, `SHA256SUMS`.
 - Linux uses distro Qt from apt (Ubuntu 24.04); Windows uses vcpkg with the
   `windows-ci` preset (Ninja) and a file binary cache under `actions/cache`.
   Cold vcpkg builds take about 2.5 h: restore/save are separate steps and the
@@ -114,8 +113,8 @@ use system tools:
 - Windows tests run on the `offscreen` platform: `tests/CMakeLists.txt` deploys the
   Qt plugins and `qoffscreen.dll` next to `tst_mainwindow` (the test hung at startup
   without them). `ctest` runs with `--timeout 120` in CI, so a hang fails with a log.
-- `ctest` cannot be run locally without Qt; CI is the first real build for packaging
-  changes. Branch rulesets are not enforced on this private repository (free plan).
+- CI is the first real build for packaging changes (Windows packaging cannot be
+  tried on Linux).
 
 ## Architecture
 
