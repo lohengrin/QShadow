@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Linux backend of the platform seam: V4L2 video, ALSA audio, sysfs discovery.
 
 #include "platform/platform.h"

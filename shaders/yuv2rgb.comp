@@ -1,5 +1,8 @@
 #version 450
 
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Planar JPEG YCbCr (JFIF: full range, BT.601) -> RGBA8, one invocation per
 // output pixel. The chroma planes may be subsampled (4:2:2, 4:2:0, ...): they
 // are sampled with a linear filter at the pixel centre, which reproduces the

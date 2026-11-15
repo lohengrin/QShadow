@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Guillaume Millet
+
 """Rasterizes the shapes of qshadow.svg into qshadow.png and qshadow.ico.
 
 Run from the repo root: python icons/make_icons.py   (needs Pillow)

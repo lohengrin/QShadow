@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 #include "v4l2_capture.h"
 
 #include "v4l2_common.h"

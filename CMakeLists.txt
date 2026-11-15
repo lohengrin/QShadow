@@ -214,13 +214,18 @@ if(WIN32)
           PATTERN "CMakeFiles" EXCLUDE
           PATTERN "_deps" EXCLUDE
           PATTERN "*.dll")
-  install(FILES LICENSE DESTINATION ".")
+  install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION ".")
+  install(FILES shaders/ATTRIBUTION.md DESTINATION "licenses" RENAME "SHADERS.md")
+  install(DIRECTORY licenses/ DESTINATION "licenses")
 endif()
 if(UNIX AND NOT APPLE)
   install(FILES qshadow.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
   install(FILES qshadow.svg
           DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
-  install(FILES LICENSE DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+  install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+  install(FILES shaders/ATTRIBUTION.md DESTINATION "${CMAKE_INSTALL_DOCDIR}/licenses"
+          RENAME "SHADERS.md")
+  install(DIRECTORY licenses/ DESTINATION "${CMAKE_INSTALL_DOCDIR}/licenses")
 endif()
 
 # ---------------------------------------------------------------------------

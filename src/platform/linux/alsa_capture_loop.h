@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 #pragma once
 
 // The ALSA capture read loop, written against a handful of PCM operations

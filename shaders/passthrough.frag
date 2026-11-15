@@ -1,5 +1,8 @@
 #version 450
 
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Plain texture sample. "None" uses NEAREST filtering, "Bilinear smooth"
 // uses LINEAR filtering; the mode only changes the sampler bound at set 0.
 

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2021 Advanced Micro Devices, Inc. (FSR 1.0 constant packing);
+// C++ port Copyright (C) 2026 Guillaume Millet
+
 #pragma once
 
 #include <cmath>

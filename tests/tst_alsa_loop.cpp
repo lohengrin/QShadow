@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // The ALSA capture read loop against a fake PCM that behaves like the real thing:
 // a capture stream only signals readiness and produces data while RUNNING, and
 // snd_pcm_recover() leaves it merely PREPARED (not restarted).

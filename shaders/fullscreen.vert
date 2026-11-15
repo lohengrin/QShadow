@@ -1,5 +1,8 @@
 #version 450
 
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Fullscreen triangle generated entirely from the vertex index, so no vertex
 // buffer is needed. uv (0,0) sits at the top-left of the viewport (Vulkan has
 // its NDC y-axis pointing down), matching the source frame's first scanline.

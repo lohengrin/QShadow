@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Smoke test of the platform backend against the real ShadowCast. Skipped when
 // the dongle is not connected, so it is safe to run anywhere.
 

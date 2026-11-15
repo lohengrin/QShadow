@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Windows backend of the platform seam: Media Foundation video, WASAPI audio.
 
 #include "platform/platform.h"

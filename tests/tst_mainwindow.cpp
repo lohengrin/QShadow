@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Behaviour of the window chrome: fullscreen shows only the video, and the
 // right-click menu mirrors the toolbar. Runs on the offscreen platform, which has
 // no Vulkan support, so the window is created without a QVulkanInstance (the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 #pragma once
 
 // Small COM / Media Foundation helpers shared by the Windows backend.

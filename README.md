@@ -225,3 +225,18 @@ The capture device is listed as a ShadowCast:
 ```
 v4l2-ctl --list-devices
 ```
+
+## License
+
+QShadow is Copyright (C) 2026 Guillaume Millet and released under the
+**GNU General Public License, version 3** (see [LICENSE](LICENSE)).
+
+It includes third-party code under compatible licenses (AMD FidelityFX FSR,
+xBRZ, CRT-Geom, hq4x) and links Qt 6 (LGPL-3.0) and libjpeg-turbo; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), [shaders/ATTRIBUTION.md](shaders/ATTRIBUTION.md)
+and the texts in [licenses/](licenses/). This software is based in part on the
+work of the Independent JPEG Group.
+
+QShadow is an independent project and is not affiliated with, endorsed by or
+supported by GENKI. "GENKI" and "ShadowCast" are trademarks of their owner and
+are used only to identify the supported hardware.

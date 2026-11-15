@@ -1,5 +1,8 @@
 #version 450
 
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Packed YUYV (YUY2, 4:2:2) -> RGBA8, one invocation per output pixel. The
 // frame is uploaded as an RGBA8 texture half as wide as the image, so one texel
 // carries two pixels: (Y0, Cb, Y1, Cr). Chroma is shared by the pixel pair

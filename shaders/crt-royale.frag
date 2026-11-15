@@ -1,5 +1,8 @@
 #version 450
 
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Guillaume Millet
+
 // Single-pass CRT emulation in the style of the libretro crt-royale
 // "fake-bloom" preset (aperture grille, scanlines, halation bloom, gentle
 // screen curvature, vignette).
